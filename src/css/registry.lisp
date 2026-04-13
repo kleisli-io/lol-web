@@ -182,7 +182,7 @@
                                          (char= (char sel 0) #\@)
                                          (not (search "@keyframes" sel)))
                                     ;; @media / @supports: selector + list of inner rules
-                                    `(cons ,sel ',(rest rule))
+                                    `(cons ,sel ',(second rule))
                                     ;; Regular rule or @keyframes: selector + properties alist
                                     `(cons ,sel ',(second rule)))))
                             rules)))
