@@ -181,8 +181,13 @@
                                          (plusp (length sel))
                                          (char= (char sel 0) #\@)
                                          (not (search "@keyframes" sel)))
-                                    ;; @media / @supports: selector + list of inner rules
-                                    `(cons ,sel ',(second rule))
+                                    ;; @media / @supports: normalize both syntaxes
+                                    ;; Wrapped:   ("@media ..." ((sel1 props1) (sel2 props2)))
+                                    ;; Unwrapped: ("@media ..." (sel1 props1) (sel2 props2))
+                                    (let ((inner-rules (if (stringp (car (second rule)))
+                                                           (rest rule)
+                                                           (second rule))))
+                                      `(cons ,sel ',inner-rules))
                                     ;; Regular rule or @keyframes: selector + properties alist
                                     `(cons ,sel ',(second rule)))))
                             rules)))
