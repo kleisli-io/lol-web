@@ -66,14 +66,13 @@
                  (t (return nil)))
             finally (return (nreverse params))))))
 
-(defun find-matching-route (method request-path)
-  "Find a route handler that matches the request.
-   First tries exact match, then pattern matching.
-   Returns (handler . path-params) or nil."
+(defun find-route-for-method (method request-path)
+  "Lookup a handler registered exactly for METHOD on REQUEST-PATH.
+   Returns (handler . path-params) or NIL."
   ;; Try exact match first
   (let ((handler (gethash (cons method request-path) *routes*)))
     (when handler
-      (return-from find-matching-route (cons handler nil))))
+      (return-from find-route-for-method (cons handler nil))))
   ;; Try pattern matching
   (loop for key being the hash-keys of *routes* using (hash-value handler)
         for (route-method . route-path) = key
@@ -83,9 +82,37 @@
              (when params
                (return (cons handler params))))))
 
+(defun find-matching-route (method request-path)
+  "Find a route handler that matches the request.
+   First tries exact match, then pattern matching.
+   HEAD requests fall back to GET handlers per RFC 7231 §4.3.2 — body is
+   stripped by `route-handler' so headers stay identical to GET.
+   Returns (handler . path-params) or nil."
+  (or (find-route-for-method method request-path)
+      (when (eq method :head)
+        (find-route-for-method :get request-path))))
+
 ;;; ============================================================================
 ;;; ROUTE DISPATCHER
 ;;; ============================================================================
+
+(defvar *before-handler-hook* nil
+  "Optional zero-arg function called within `with-response-headers' scope
+   before each regular route handler runs.  Use `add-response-header' inside
+   the hook to inject app-wide response headers (e.g. discovery affordances).
+   Skipped on the streaming-handler path (WebSocket/SSE).")
+
+(defun strip-body-for-head (response)
+  "Return RESPONSE with body removed if present.  Used to satisfy RFC 7231
+   §4.3.2 for HEAD requests routed to GET handlers — same status, same
+   headers, no body."
+  (cond
+    ;; Standard (status headers body) Clack response.
+    ((and (consp response) (>= (length response) 2))
+     (list (first response) (second response) nil))
+    ;; Delayed/function response — leave alone; the underlying handler is
+    ;; responsible for not streaming on HEAD.
+    (t response)))
 
 (defun route-handler (env)
   "Main route dispatcher for Clack.
@@ -96,21 +123,27 @@
   (let* ((*env* env)
          (path (request-path))
          (method (request-method))
-         (match (find-matching-route method path)))
-    (if match
-        (let ((*path-params* (cdr match))
-              (handler (car match)))
-          ;; Check if handler takes an argument (streaming handlers need env)
-          (let ((lambda-list (ignore-errors
-                              (sb-introspect:function-lambda-list handler))))
-            (if (and lambda-list (not (null lambda-list)))
-                ;; Handler takes env - streaming handler (WebSocket/SSE)
-                (funcall handler env)
-                ;; Regular handler - no args, uses *env*
-                (with-response-headers ()
-                  (with-error-handling (format nil "~A ~A" method path)
-                    (funcall handler))))))
-        (error-response 404 :message "Not Found"))))
+         (match (find-matching-route method path))
+         (response
+           (if match
+               (let ((*path-params* (cdr match))
+                     (handler (car match)))
+                 ;; Check if handler takes an argument (streaming handlers need env)
+                 (let ((lambda-list (ignore-errors
+                                     (sb-introspect:function-lambda-list handler))))
+                   (if (and lambda-list (not (null lambda-list)))
+                       ;; Handler takes env - streaming handler (WebSocket/SSE)
+                       (funcall handler env)
+                       ;; Regular handler - no args, uses *env*
+                       (with-response-headers ()
+                         (when *before-handler-hook*
+                           (funcall *before-handler-hook*))
+                         (with-error-handling (format nil "~A ~A" method path)
+                           (funcall handler))))))
+               (error-response 404 :message "Not Found"))))
+    (if (eq method :head)
+        (strip-body-for-head response)
+        response)))
 
 ;;; ============================================================================
 ;;; APPLICATION BUILDER
@@ -301,17 +334,26 @@
   "Handle a normal (status headers body) response."
   (destructuring-bind (status headers &optional body) response
     (setf (hunchentoot:return-code*) status)
-    ;; Set headers
-    (loop for (key val) on headers by #'cddr
-          if (eq key :content-type)
-            do (setf (hunchentoot:content-type*) val)
-          else if (eq key :content-length)
-            do (setf (hunchentoot:content-length*) val)
-          else if (eq key :set-cookie)
-            do (rplacd (last (hunchentoot:headers-out*))
-                       (list (cons key val)))
-          else
-            do (setf (hunchentoot:header-out key) val))
+    ;; Emit headers.  A header key may appear more than once in the plist
+    ;; — e.g. a global before-handler hook adds `Link: </llms.txt>; rel=
+    ;; \"llms-txt\"` and a per-route handler adds another `Link` entry for
+    ;; an alternate representation.  Per RFC 7230 §3.2.2 / RFC 8288 these
+    ;; must be preserved as separate header lines (or comma-joined), not
+    ;; collapsed.  `(setf hunchentoot:header-out)` has replace semantics,
+    ;; so we use it only for the first occurrence and append subsequent
+    ;; occurrences via the same `rplacd` pattern as `:set-cookie`.
+    (let ((seen (make-hash-table :test 'eq)))
+      (loop for (key val) on headers by #'cddr
+            if (eq key :content-type)
+              do (setf (hunchentoot:content-type*) val)
+            else if (eq key :content-length)
+              do (setf (hunchentoot:content-length*) val)
+            else if (or (eq key :set-cookie) (gethash key seen))
+              do (rplacd (last (hunchentoot:headers-out*))
+                         (list (cons key val)))
+            else
+              do (setf (hunchentoot:header-out key) val)
+                 (setf (gethash key seen) t)))
     ;; Handle body
     (unless body
       ;; No body provided - return streaming writer for delayed response

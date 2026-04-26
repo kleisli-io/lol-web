@@ -187,6 +187,7 @@
    #:defroute
    #:defapi
    #:*server*
+   #:*before-handler-hook*
    #:start-server
    #:stop-server
    #:json-body

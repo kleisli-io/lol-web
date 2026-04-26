@@ -27,7 +27,16 @@
                        css-href
                        (include-tailwind t)
                        (include-htmx t)
-                       (include-surgery nil))
+                       (include-surgery nil)
+                       description
+                       canonical
+                       (og-type "website")
+                       og-title
+                       og-description
+                       og-url
+                       og-image
+                       og-image-alt
+                       og-site-name)
   "Generate a complete HTML page with token-driven CSS variables.
 
    NO hardcoded colors, fonts, or styles - apps provide their own theme.
@@ -41,13 +50,45 @@
    - CSS-HREF: Compiled CSS stylesheet path (when provided, suppresses CDN)
    - INCLUDE-TAILWIND: Include Tailwind CDN (default t, ignored when CSS-HREF set)
    - INCLUDE-HTMX: Include HTMX-style runtime (default t)
-   - INCLUDE-SURGERY: Include surgery panel runtime (default nil)"
+   - INCLUDE-SURGERY: Include surgery panel runtime (default nil)
+   - DESCRIPTION: <meta name=description> for search snippets
+   - CANONICAL: <link rel=canonical> URL (always set on public pages)
+   - OG-TYPE: og:type (default \"website\")
+   - OG-TITLE / OG-DESCRIPTION / OG-URL / OG-IMAGE / OG-IMAGE-ALT / OG-SITE-NAME:
+     OpenGraph fields for social cards (LinkedIn, Slack, Discord, iMessage).
+     OG-TITLE/OG-DESCRIPTION default to TITLE/DESCRIPTION when nil."
   (cl-who:with-html-output-to-string (s nil :prologue t)
     (:html :lang lang
       (:head
        (:meta :charset "utf-8")
        (:meta :name "viewport" :content "width=device-width, initial-scale=1")
        (:title (cl-who:str title))
+
+       (when description
+         (cl-who:htm (:meta :name "description" :content description)))
+       (when canonical
+         (cl-who:htm (:link :rel "canonical" :href canonical)))
+
+       ;; OpenGraph — emitted when any og-* is set or canonical/description
+       ;; give us enough to populate the minimum quad.
+       (let ((og-t  (or og-title title))
+             (og-d  (or og-description description))
+             (og-u  (or og-url canonical)))
+         (when (or og-image og-t og-d og-u og-site-name)
+           (cl-who:htm
+            (:meta :property "og:type"        :content og-type)
+            (when og-t (cl-who:htm (:meta :property "og:title"       :content og-t)))
+            (when og-d (cl-who:htm (:meta :property "og:description" :content og-d)))
+            (when og-u (cl-who:htm (:meta :property "og:url"         :content og-u)))
+            (when og-site-name
+              (cl-who:htm (:meta :property "og:site_name" :content og-site-name)))
+            (when og-image
+              (cl-who:htm
+               (:meta :property "og:image"        :content og-image)
+               (:meta :property "og:image:width"  :content "1200")
+               (:meta :property "og:image:height" :content "630")
+               (when og-image-alt
+                 (cl-who:htm (:meta :property "og:image:alt" :content og-image-alt))))))))
 
        ;; Compiled CSS (when provided, replaces CDN)
        (when css-href
