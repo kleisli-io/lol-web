@@ -1,4 +1,4 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/OPTIMIZATION; Base: 10 -*-
 ;;;; optimization/template-validation.lisp - Compile-Time Template Validation
 ;;;;
 ;;;; PURPOSE:
@@ -18,7 +18,7 @@
 ;;;;   All validation happens at macro-expansion time.
 ;;;;   Runtime code is just the validated template - zero overhead.
 
-(in-package :lol-reactive)
+(in-package :lol-web/optimization)
 
 ;;; ============================================================================
 ;;; HTML VALIDATION
@@ -121,20 +121,42 @@
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (defparameter *registered-css-classes* (make-hash-table :test 'equal)
-    "Registry of known CSS classes from design system.")
+    "Registry of known CSS classes from design system. Stores complete
+     class names that must match exactly.")
+
+  (defparameter *registered-css-prefixes* nil
+    "List of CSS class-name prefixes (e.g., \"p-\", \"text-\"). A
+     candidate class is considered valid if it begins with a registered
+     prefix AND has at least one non-prefix character — bare prefixes
+     like \"p-\" are not themselves valid class names.")
 
   (defun register-css-class (class-name &optional source)
     "Register a CSS class as valid."
     (setf (gethash class-name *registered-css-classes*) source))
 
+  (defun register-css-prefix (prefix &optional source)
+    "Register a class-name prefix. Validation accepts any class that
+     starts with PREFIX and has additional characters after it."
+    (declare (ignore source))
+    (pushnew prefix *registered-css-prefixes* :test #'string=))
+
+  (defun %class-matches-prefix-p (class-name)
+    "True iff CLASS-NAME starts with one of *registered-css-prefixes*
+     AND has additional content after the prefix."
+    (some (lambda (prefix)
+            (and (> (length class-name) (length prefix))
+                 (string= prefix class-name :end2 (length prefix))))
+          *registered-css-prefixes*))
+
   (defun validate-css-class (class-name &key (strict nil))
     "Validate CSS class exists in registry.
      STRICT: If T, error on unknown class. If NIL, just warn."
-    (unless (gethash class-name *registered-css-classes*)
+    (unless (or (gethash class-name *registered-css-classes*)
+                (%class-matches-prefix-p class-name))
       (let ((all-classes nil))
         (maphash (lambda (k v) (declare (ignore v)) (push k all-classes))
                  *registered-css-classes*)
-        (if (null all-classes)
+        (if (and (null all-classes) (null *registered-css-prefixes*))
             ;; No classes registered - skip validation
             t
             ;; Find closest match
@@ -333,14 +355,19 @@
 ;;; ============================================================================
 
 (defun register-tailwind-classes ()
-  "Register common Tailwind CSS classes for validation."
-  (dolist (prefix '("flex" "grid" "block" "inline" "hidden"
-                    "p-" "m-" "px-" "py-" "mx-" "my-"
+  "Register common Tailwind CSS classes for validation. Static utilities
+   (flex, grid, etc.) go into the exact-match registry; prefixes that
+   compose with arbitrary suffixes (p-4, text-red-500, hover:bg-blue-500)
+   go into the prefix registry, which only matches when the candidate
+   class extends past the prefix itself."
+  (dolist (cls '("flex" "grid" "block" "inline" "hidden"))
+    (register-css-class cls :tailwind))
+  (dolist (prefix '("p-" "m-" "px-" "py-" "mx-" "my-"
                     "w-" "h-" "min-w-" "min-h-" "max-w-" "max-h-"
                     "text-" "font-" "bg-" "border-" "rounded-"
                     "shadow-" "hover:" "focus:" "active:"
                     "sm:" "md:" "lg:" "xl:" "2xl:"))
-    (register-css-class prefix :tailwind)))
+    (register-css-prefix prefix :tailwind)))
 
 (defun register-component-classes (component-name classes)
   "Register CSS classes for a component."

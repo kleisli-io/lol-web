@@ -1,4 +1,4 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/CORE; Base: 10 -*-
 ;;;; LOL-REACTIVE Signals - Fine-grained reactive primitives
 ;;;;
 ;;;; Core reactive engine:
@@ -10,26 +10,77 @@
 ;;;;
 ;;;; All primitives use Let Over Lambda patterns (pandoric closures, dlambda)
 
-(in-package :lol-reactive)
+(in-package :lol-web/core)
 
 ;;; ============================================================================
 ;;; DEPENDENCY TRACKING INFRASTRUCTURE
 ;;; ============================================================================
+
+;;; Reactive primitives are SINGLE-THREADED by default. *current-effect*,
+;;; *batch-depth*, *pending-effects*, and the per-signal subscribers tables
+;;; are global mutable state — concurrent threads sharing a signal graph
+;;; race on those. A typical web request runs on its own thread and never
+;;; crosses signal boundaries, so no wrapper is needed. To share signals
+;;; across threads, wrap reactive call sites in WITH-LOL-WEB-THREAD-SAFETY.
 
 (defparameter *current-effect* nil
   "The currently executing effect (for automatic dependency tracking).
    When an effect function runs, accessing any signal automatically
    subscribes that effect to future changes.")
 
+(defparameter *current-effect-register* nil
+  "When inside an effect that tracks its subscriptions for clean disposal,
+   this holds a unary function. Reactive sources call it with their
+   subscribers hash-table whenever they record *current-effect* as a
+   subscriber, so the effect's dispose path can later drop those
+   subscriptions and stop being re-run.")
+
 (defparameter *batch-depth* 0
   "When > 0, defer effect execution until batch completes.
-   This allows multiple state changes without intermediate re-renders.")
+   This allows multiple state changes without intermediate re-renders.
+   Read-modify-write — not safe under concurrent access without
+   WITH-LOL-WEB-THREAD-SAFETY.")
 
 (defparameter *pending-effects* '()
-  "Effects waiting to run after batch completes.")
+  "Effects waiting to run after batch completes. Mutated by signal setters
+   during batched updates — not safe under concurrent access without
+   WITH-LOL-WEB-THREAD-SAFETY.")
 
 (defparameter *max-signal-history* 100
   "Default maximum history entries for pandoric signals. NIL = unlimited.")
+
+(defvar *thread-safety-lock*
+  (bordeaux-threads:make-lock "lol-reactive thread-safety")
+  "Coarse lock acquired by WITH-LOL-WEB-THREAD-SAFETY. One lock guards every
+   reactive operation wrapped in the macro, so two threads cannot interleave
+   their effect runs, batches, or signal updates on shared signal state.")
+
+(defmacro with-lol-web-thread-safety (&body body)
+  "Serialise reactive operations across threads.
+
+   Signals, effects, computed, and batch are single-threaded by default —
+   *current-effect*, *batch-depth*, *pending-effects*, and the per-signal
+   subscribers tables are global mutable state with no internal locking.
+   Wrap any cross-thread reactive call site with this macro to acquire
+   *thread-safety-lock* for the duration of BODY.
+
+   Within a single request thread, no wrapper is needed.
+
+   Example (two threads sharing a counter signal):
+     (with-lol-web-thread-safety
+       (funcall set-counter (1+ (funcall counter))))"
+  `(bordeaux-threads:with-lock-held (*thread-safety-lock*)
+     ,@body))
+
+(defun track-subscription (subscribers)
+  "Subscribe the currently-executing effect to changes in this reactive source.
+   No-op outside an effect. When the effect tracks subscriptions (via
+   *current-effect-register*), also register the subscribers table with the
+   effect so its disposer can unsubscribe."
+  (when *current-effect*
+    (setf (gethash *current-effect* subscribers) t)
+    (when *current-effect-register*
+      (funcall *current-effect-register* subscribers))))
 
 ;;; ============================================================================
 ;;; SIGNAL - Basic Reactive Value with Auto-Tracking
@@ -58,8 +109,7 @@
     (values
      ;; Getter - tracks dependency when called during effect
      (lambda ()
-       (when *current-effect*
-         (setf (gethash *current-effect* subscribers) t))
+       (track-subscription subscribers)
        value)
      ;; Setter - triggers all subscribed effects
      (lambda (new-value)
@@ -100,24 +150,36 @@
          (funcall set-name \"Bob\")   ; prints cleanup, then \"Hello, Bob!\"
          (funcall dispose)))          ; prints cleanup, stops tracking"
   (let ((effect-fn nil)
-        (cleanup-fn nil))
-    (setf effect-fn
-          (lambda ()
-            ;; Run cleanup from previous execution
-            (when (functionp cleanup-fn)
-              (funcall cleanup-fn)
-              (setf cleanup-fn nil))
-            ;; Track this effect during execution
-            (let ((*current-effect* effect-fn))
-              (setf cleanup-fn (funcall fn)))))
-    ;; Run immediately to establish initial dependencies
-    (funcall effect-fn)
-    ;; Return disposer
-    (lambda ()
-      (when (functionp cleanup-fn)
-        (funcall cleanup-fn))
-      ;; Prevent further runs by nullifying
-      (setf effect-fn nil))))
+        (cleanup-fn nil)
+        (tracked-subscribers '()))
+    (flet ((register (subs)
+             (pushnew subs tracked-subscribers :test #'eq))
+           (drop-all-subscriptions ()
+             (dolist (subs tracked-subscribers)
+               (remhash effect-fn subs))
+             (setf tracked-subscribers '())))
+      (setf effect-fn
+            (lambda ()
+              ;; Run cleanup from previous execution
+              (when (functionp cleanup-fn)
+                (funcall cleanup-fn)
+                (setf cleanup-fn nil))
+              ;; Track this effect and record its subscriptions during execution
+              (let ((*current-effect* effect-fn)
+                    (*current-effect-register* #'register))
+                (setf cleanup-fn (funcall fn)))))
+      ;; Run immediately to establish initial dependencies
+      (funcall effect-fn)
+      ;; Return disposer — clears every subscribers table the effect appeared in
+      ;; before nullifying effect-fn. Without unsubscribe a disposed effect keeps
+      ;; running on every signal change because the subscriber table still keys
+      ;; on the closure object.
+      (lambda ()
+        (when (functionp cleanup-fn)
+          (funcall cleanup-fn)
+          (setf cleanup-fn nil))
+        (drop-all-subscriptions)
+        (setf effect-fn nil)))))
 
 ;;; ============================================================================
 ;;; BATCH - Group Multiple Updates
@@ -176,25 +238,28 @@
 
    Example with custom test (for hash-table results):
      (make-computed (lambda () (build-state-hash-table)) :test #'equalp)"
-  (let ((value nil)
-        (subscribers (make-hash-table :test 'eq)))
-    ;; Create an effect that recomputes when deps change
-    (make-effect
+  (let* ((value nil)
+         (subscribers (make-hash-table :test 'eq))
+         ;; Capture and retain the disposer so the recompute effect can be torn
+         ;; down. Previously the disposer was discarded — the internal effect
+         ;; remained alive for the lifetime of every source signal it tracked.
+         (dispose (make-effect
+                   (lambda ()
+                     (let ((new-value (funcall compute-fn)))
+                       (unless (funcall test value new-value)
+                         (setf value new-value)
+                         (maphash (lambda (effect v)
+                                    (declare (ignore v))
+                                    (when effect (funcall effect)))
+                                  subscribers)))
+                     nil))))
+    (values
+     ;; Getter
      (lambda ()
-       (let ((new-value (funcall compute-fn)))
-         ;; Only notify subscribers if value actually changed
-         (unless (funcall test value new-value)
-           (setf value new-value)
-           (maphash (lambda (effect v)
-                      (declare (ignore v))
-                      (when effect (funcall effect)))
-                    subscribers)))
-       nil))
-    ;; Return getter
-    (lambda ()
-      (when *current-effect*
-        (setf (gethash *current-effect* subscribers) t))
-      value)))
+       (track-subscription subscribers)
+       value)
+     ;; Disposer — call to stop tracking source signals.
+     dispose)))
 
 ;;; ============================================================================
 ;;; PANDORIC SIGNAL - Introspectable Reactive Value
@@ -237,8 +302,7 @@
     (dlambda
       ;; Get value (reactive - tracks dependency)
       (:get ()
-       (when *current-effect*
-         (setf (gethash *current-effect* subscribers) t))
+       (track-subscription subscribers)
        value)
 
       ;; Set value (triggers effects, respects batch)

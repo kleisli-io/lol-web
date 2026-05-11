@@ -1,9 +1,9 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/CLIENT-RUNTIME; Base: 10 -*-
 ;;;; Combined client runtime aggregator
 ;;;;
 ;;;; Bundles all client-side JavaScript runtimes into a single output.
 
-(in-package :lol-reactive)
+(in-package :lol-web/client-runtime)
 
 ;;; ============================================================================
 ;;; COMBINED RUNTIME

@@ -1,9 +1,9 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/CORE; Base: 10 -*-
 ;;;; Context API
 ;;;; Enables shared state down component trees without prop drilling
 ;;;; Uses Lisp's dynamic variables for natural scoping
 
-(in-package :lol-reactive)
+(in-package :lol-web/core)
 
 ;;; ============================================================================
 ;;; CONTEXT REGISTRY

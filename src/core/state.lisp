@@ -1,11 +1,11 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/CORE; Base: 10 -*-
 ;;;; LOL-REACTIVE State Management - Higher-level patterns built on signals
 ;;;;
 ;;;; - Store: Redux-like centralized state
 ;;;; - Evolving Component: Self-modifying behavior with hot-swap
 ;;;; - Component Factory: Dynamic component creation at runtime
 
-(in-package :lol-reactive)
+(in-package :lol-web/core)
 
 ;;; ============================================================================
 ;;; STORE - Redux-like Centralized State

@@ -1,10 +1,10 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/DEVTOOLS; Base: 10 -*-
 ;;;; Client-side JavaScript for Component Surgery
 ;;;;
 ;;;; ALL code generated via Parenscript. NO raw JavaScript strings.
 ;;;; Colors use CSS variables from tokens, not hardcoded values.
 
-(in-package :lol-reactive)
+(in-package :lol-web/devtools)
 
 ;;; ============================================================================
 ;;; SURGERY RUNTIME JAVASCRIPT (Parenscript)

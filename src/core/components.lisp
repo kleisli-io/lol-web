@@ -1,8 +1,8 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/CORE; Base: 10 -*-
 ;;;; Core component system using Let Over Lambda patterns
 ;;;; Components are pandoric closures with reactive state
 
-(in-package :lol-reactive)
+(in-package :lol-web/core)
 
 ;;; ============================================================================
 ;;; COMPONENT REGISTRY
@@ -10,6 +10,12 @@
 
 (defparameter *components* (make-hash-table :test 'equal)
   "Registry of all component instances by ID.")
+
+(declaim (type fixnum *component-counter*))
+(sb-ext:defglobal *component-counter* 0
+  "Monotonic counter for auto-generated component IDs. Bumped via
+   sb-ext:atomic-incf so concurrent component construction never
+   produces colliding IDs.")
 
 (defun register-component (id component)
   "Register a component in the global registry."
@@ -45,8 +51,8 @@
              body))
 
   (defun generate-component-id (component-name)
-    "Generate a unique component ID."
-    (format nil "~a-~a" component-name (random 1000000))))
+    "Generate a unique component ID via an atomic monotonic counter."
+    (format nil "~a-~a" component-name (sb-ext:atomic-incf *component-counter*))))
 
 (defmacro! defcomponent (name (&rest state-vars) &body body)
   "Define a reactive component using pandoric closures.

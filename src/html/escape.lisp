@@ -1,18 +1,17 @@
-;;;; LOL-REACTIVE HTML Escape
-;;;; XSS prevention utilities (aliases to security.lisp functions)
+;;;; HTML escape utilities — thin wrappers over :lol-web/sanitize.
 
-(in-package :lol-reactive)
+(in-package :lol-web/html)
 
 ;;; ============================================================================
 ;;; HTML ESCAPING (XSS Prevention)
 ;;;
-;;; These are convenient aliases for the sanitization functions in security.lisp.
-;;; The actual implementations live there to avoid circular dependencies.
+;;; Thin wrappers exposing :lol-web/sanitize's sanitize-html under HTML-flavoured
+;;; names. The :lol-web/html package :uses :lol-web/sanitize, so sanitize-html
+;;; resolves directly here.
 ;;; ============================================================================
 
 (defun escape-html (string)
-  "Escape HTML special characters to prevent XSS.
-   Alias for sanitize-html from security.lisp.
+  "Escape HTML special characters to prevent XSS. Delegates to sanitize-html.
 
    Example:
      (escape-html \"<script>alert('xss')</script>\")

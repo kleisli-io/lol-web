@@ -1,9 +1,9 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/REALTIME-HTMX; Base: 10 -*-
 ;;;; Server-Sent Events (SSE) client runtime (Parenscript)
 ;;;;
 ;;;; Client-side SSE connection management and message processing.
 
-(in-package :lol-reactive)
+(in-package :lol-web/realtime-htmx)
 
 ;;; ============================================================================
 ;;; SSE CLIENT RUNTIME (Parenscript)

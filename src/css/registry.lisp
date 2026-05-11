@@ -1,35 +1,37 @@
-;;;; css/registry.lisp - CSS module system using Let Over Lambda patterns
+;;;; css/registry.lisp - CSS module system
 ;;;;
-;;;; PURPOSE:
-;;;;   CSS modules as pandoric closures with introspectable state.
-;;;;   Each module responds to messages (:render, :rules, :add-rule, :inspect).
-;;;;   Global registry collects modules in load order.
+;;;; CSS modules are message-dispatch closures (`(:render :rules :add-rule
+;;;; :remove-rule :inspect)`). A global registry collects them in
+;;;; registration order, then `generate-all-component-css` concatenates
+;;;; their rendered output in load order.
 ;;;;
-;;;; USAGE:
-;;;;   ;; Create a CSS module
-;;;;   (defvar *button-css*
-;;;;     (make-css-module :buttons
-;;;;       '(".btn" . (("padding" . "1rem") ("margin" . "0")))
-;;;;       '(".btn:hover" . (("opacity" . "0.8")))))
-;;;;
-;;;;   (funcall *button-css* :render)   ; Generate CSS string
-;;;;   (funcall *button-css* :rules)    ; Get rule list
-;;;;   (funcall *button-css* :inspect)  ; Full introspection
-;;;;
-;;;;   (generate-all-component-css)     ; Render all registered modules
+;;;; Concurrency: registration and generation can happen from any thread
+;;;; (e.g., concurrent component module loads under SLY/swank, or runtime
+;;;; `defcss` evaluation). `*css-registry-lock*` serialises every read and
+;;;; write of `*component-css-registry*` and `*css-load-order*`. Recursive
+;;;; because public entry points compose (e.g., `get-component-css` calls
+;;;; `get-css-module`).
 
-(in-package :lol-reactive)
+(in-package :lol-web/css)
 
 ;;; ─────────────────────────────────────────────────────────────────────────────
 ;;; Global Registry State
 ;;; ─────────────────────────────────────────────────────────────────────────────
 
 (defvar *component-css-registry* (make-hash-table :test 'eq)
-  "Hash table mapping module names (keywords) to CSS module closures.")
+  "Hash table mapping module names (keywords) to CSS module closures.
+   Mutated only under `*css-registry-lock*`.")
 
 (defvar *css-load-order* nil
   "List of module names in registration order (most recent first).
-   Reversed during generation to maintain load order in output.")
+   Reversed during generation to maintain load order in output.
+   Mutated only under `*css-registry-lock*`.")
+
+(defvar *css-registry-lock*
+  (bordeaux-threads:make-recursive-lock "lol-web/css registry")
+  "Serialises every read and write of `*component-css-registry*` and
+   `*css-load-order*`. Recursive so composing entry points (e.g.,
+   `get-component-css` → `get-css-module`) don't self-deadlock.")
 
 ;;; ─────────────────────────────────────────────────────────────────────────────
 ;;; CSS Module Factory (Let Over Lambda Pattern)
@@ -55,80 +57,76 @@
   (let ((module-name name)
         (rules (copy-list initial-rules))
         (created-at (get-universal-time)))
+    (bordeaux-threads:with-recursive-lock-held (*css-registry-lock*)
+      ;; Auto-register in global registry. The closure body runs later
+      ;; under callers' threads — its mutation of the per-module `rules`
+      ;; alist is bounded to that module instance and not shared state,
+      ;; so it does not need the registry lock.
+      (setf (gethash name *component-css-registry*)
+            (lambda (message &rest args)
+              (case message
+                (:name module-name)
 
-    ;; Auto-register in global registry
-    (setf (gethash name *component-css-registry*)
-          (lambda (message &rest args)
-            (case message
-              (:name module-name)
+                (:rules rules)
 
-              (:rules rules)
+                (:add-rule
+                 (destructuring-bind (selector properties) args
+                   (push (cons selector properties) rules)
+                   selector))
 
-              (:add-rule
-               (destructuring-bind (selector properties) args
-                 (push (cons selector properties) rules)
-                 selector))
+                (:remove-rule
+                 (let ((selector (first args)))
+                   (setf rules (remove-if (lambda (r) (string= (car r) selector)) rules))
+                   selector))
 
-              (:remove-rule
-               (let ((selector (first args)))
-                 (setf rules (remove-if (lambda (r) (string= (car r) selector)) rules))
-                 selector))
+                (:render
+                 ;; Each branch delegates to css-rule / css-keyframes from
+                 ;; generation.lisp so symbol/keyword property keys are
+                 ;; normalised the same way regardless of which entry
+                 ;; point a caller takes.
+                 (with-output-to-string (out)
+                   (dolist (rule rules)
+                     (let ((selector (car rule))
+                           (props (cdr rule)))
+                       (cond
+                         ;; "@keyframes <name>" — strip the 11-char prefix
+                         ;; and pass the frame list to css-keyframes.
+                         ((and (stringp selector)
+                               (>= (length selector) 11)
+                               (string= (subseq selector 0 11) "@keyframes "))
+                          (format out "~A~%"
+                                  (apply #'css-keyframes
+                                         (subseq selector 11)
+                                         props)))
+                         ;; "@media ..." — props is a list of (sel props)
+                         ;; pairs; render each nested rule via css-rule.
+                         ((and (stringp selector)
+                               (>= (length selector) 6)
+                               (string= (subseq selector 0 6) "@media"))
+                          (format out "~A {~%" selector)
+                          (dolist (inner-rule props)
+                            (let ((inner-sel (first inner-rule))
+                                  (inner-props (second inner-rule)))
+                              (format out "  ~A~%" (css-rule inner-sel inner-props))))
+                          (format out "}~%"))
+                         (t
+                          (format out "~A~%" (css-rule selector props))))))))
 
-              (:render
-               (with-output-to-string (out)
-                 (dolist (rule rules)
-                   (let ((selector (car rule))
-                         (props (cdr rule)))
-                     (cond
-                       ;; Handle @keyframes specially
-                       ;; Format: ("@keyframes name" (("from" . ((prop . val)...)) ("to" . ...)))
-                       ((and (stringp selector)
-                             (>= (length selector) 11)
-                             (string= (subseq selector 0 11) "@keyframes "))
-                        (format out "~A { ~{~A~^ ~} }~%"
-                                selector
-                                (mapcar (lambda (frame)
-                                          (format nil "~A { ~{~A: ~A;~^ ~} }"
-                                                  (car frame)
-                                                  (mapcan (lambda (p) (list (car p) (cdr p)))
-                                                          (cdr frame))))
-                                        props)))
-                       ;; Handle @media queries
-                       ;; Format: ("@media (...)" ((".sel" (("prop" . "val")...)) ...))
-                       ((and (stringp selector)
-                             (>= (length selector) 6)
-                             (string= (subseq selector 0 6) "@media"))
-                        (format out "~A {~%" selector)
-                        (dolist (inner-rule props)
-                          (let ((inner-sel (first inner-rule))
-                                (inner-props (second inner-rule)))
-                            (format out "  ~A { ~{~A: ~A;~^ ~} }~%"
-                                    inner-sel
-                                    (mapcan (lambda (p) (list (car p) (cdr p)))
-                                            inner-props))))
-                        (format out "}~%"))
-                       ;; Regular CSS rule
-                       (t
-                        (format out "~A { ~{~A: ~A;~^ ~} }~%"
-                                selector
-                                (mapcan (lambda (p) (list (car p) (cdr p)))
-                                        props))))))))
+                (:inspect
+                 (list :name module-name
+                       :created-at created-at
+                       :rule-count (length rules)
+                       :rules rules))
 
-              (:inspect
-               (list :name module-name
-                     :created-at created-at
-                     :rule-count (length rules)
-                     :rules rules))
+                (otherwise
+                 (error "Unknown CSS module message: ~S" message)))))
 
-              (otherwise
-               (error "Unknown CSS module message: ~S" message)))))
+      ;; Track load order
+      (unless (member name *css-load-order*)
+        (push name *css-load-order*))
 
-    ;; Track load order
-    (unless (member name *css-load-order*)
-      (push name *css-load-order*))
-
-    ;; Return the module
-    (gethash name *component-css-registry*)))
+      ;; Return the module
+      (gethash name *component-css-registry*))))
 
 ;;; ─────────────────────────────────────────────────────────────────────────────
 ;;; Registry Functions
@@ -136,10 +134,13 @@
 
 (defun get-css-module (name)
   "Get a CSS module by name."
-  (gethash name *component-css-registry*))
+  (bordeaux-threads:with-recursive-lock-held (*css-registry-lock*)
+    (gethash name *component-css-registry*)))
 
 (defun get-component-css (name)
-  "Get rendered CSS for a single module."
+  "Get rendered CSS for a single module.
+   The `:render` call happens outside the registry lock — the module's
+   own state is independent of the registry once we hold the closure."
   (let ((module (get-css-module name)))
     (when module
       (funcall module :render))))
@@ -151,15 +152,21 @@
 (defun generate-all-component-css ()
   "Generate CSS from all registered modules in load order.
 
-   Returns concatenated CSS string with section headers for each module."
-  (with-output-to-string (out)
-    (dolist (name (reverse *css-load-order*))
-      (let ((module (get-css-module name)))
-        (when module
-          (let ((css (funcall module :render)))
-            (when (and css (> (length css) 0))
-              (format out "~&/* ═══ ~A ═══ */~%" name)
-              (format out "~A~%" css))))))))
+   Returns concatenated CSS string with section headers for each module.
+   Snapshots the load order under the registry lock, then renders each
+   module without holding the lock — `:render` calls touch only the
+   module's own closure state."
+  (let ((names-in-load-order
+          (bordeaux-threads:with-recursive-lock-held (*css-registry-lock*)
+            (reverse *css-load-order*))))
+    (with-output-to-string (out)
+      (dolist (name names-in-load-order)
+        (let ((module (get-css-module name)))
+          (when module
+            (let ((css (funcall module :render)))
+              (when (and css (> (length css) 0))
+                (format out "~&/* ═══ ~A ═══ */~%" name)
+                (format out "~A~%" css)))))))))
 
 ;;; ─────────────────────────────────────────────────────────────────────────────
 ;;; Convenience Macro
@@ -200,18 +207,23 @@
 
 (defun clear-css-registry ()
   "Clear the CSS registry. Used in tests."
-  (clrhash *component-css-registry*)
-  (setf *css-load-order* nil)
-  t)
+  (bordeaux-threads:with-recursive-lock-held (*css-registry-lock*)
+    (clrhash *component-css-registry*)
+    (setf *css-load-order* nil)
+    t))
 
 (defun list-registered-css-components ()
   "List all registered module names in load order."
-  (reverse *css-load-order*))
+  (bordeaux-threads:with-recursive-lock-held (*css-registry-lock*)
+    (reverse *css-load-order*)))
 
 (defun inspect-css-registry ()
   "Inspect all registered CSS modules."
-  (mapcar (lambda (name)
-            (let ((module (get-css-module name)))
-              (when module
-                (funcall module :inspect))))
-          (reverse *css-load-order*)))
+  (let ((names-in-load-order
+          (bordeaux-threads:with-recursive-lock-held (*css-registry-lock*)
+            (reverse *css-load-order*))))
+    (mapcar (lambda (name)
+              (let ((module (get-css-module name)))
+                (when module
+                  (funcall module :inspect))))
+            names-in-load-order)))

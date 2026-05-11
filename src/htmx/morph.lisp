@@ -1,4 +1,4 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/HTMX; Base: 10 -*-
 ;;;; Idiomorph integration for DOM morphing with state preservation
 ;;;;
 ;;;; Provides smooth DOM updates that preserve:
@@ -8,7 +8,7 @@
 ;;;;
 ;;;; Based on idiomorph 0.3.0: https://github.com/bigskysoftware/idiomorph
 
-(in-package :lol-reactive)
+(in-package :lol-web/htmx)
 
 ;;; ============================================================================
 ;;; IDIOMORPH LIBRARY INCLUSION
@@ -53,15 +53,17 @@
         (setf (ps:@ *htmx* swap)
               (lambda (target html swap-style)
                 (cond
-                  ;; morph - morph innerHTML, preserve focus/state
-                  ((= swap-style "morph")
+                  ;; "morph" is the default alias for "morph:innerHTML" —
+                  ;; innerHTML morph preserving focus and form state.
+                  ((or (= swap-style "morph")
+                       (= swap-style "morph:innerHTML"))
                    (let ((temp (ps:chain document (create-element "div"))))
                      (setf (ps:@ temp inner-h-t-m-l) html)
                      ((ps:@ -idiomorph morph) target (ps:@ temp first-child)
                       (ps:create :morph-style "innerHTML"
                                  :ignore-active-value t))))
 
-                  ;; morph:outerHTML - morph entire element
+                  ;; "morph:outerHTML" — morph the entire element.
                   ((= swap-style "morph:outerHTML")
                    (let ((temp (ps:chain document (create-element "div"))))
                      (setf (ps:@ temp inner-h-t-m-l) html)
@@ -69,15 +71,6 @@
                       (ps:create :morph-style "outerHTML"
                                  :ignore-active-value t))))
 
-                  ;; morph:innerHTML - explicit innerHTML morph
-                  ((= swap-style "morph:innerHTML")
-                   (let ((temp (ps:chain document (create-element "div"))))
-                     (setf (ps:@ temp inner-h-t-m-l) html)
-                     ((ps:@ -idiomorph morph) target (ps:@ temp first-child)
-                      (ps:create :morph-style "innerHTML"
-                                 :ignore-active-value t))))
-
-                  ;; Default to original swap
                   (t
                    (funcall original-swap target html swap-style))))))
 

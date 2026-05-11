@@ -1,4 +1,4 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/OPTIMIZATION; Base: 10 -*-
 ;;;; optimization/reactive-analysis.lisp - Compile-Time Reactive Dependency Analysis
 ;;;;
 ;;;; PURPOSE:
@@ -18,7 +18,7 @@
 ;;;;   - dlambda for state management in generated code
 ;;;;   - symb for symbol construction
 
-(in-package :lol-reactive)
+(in-package :lol-web/optimization)
 
 ;;; ============================================================================
 ;;; COMPILE-TIME DEPENDENCY ANALYSIS
@@ -231,17 +231,23 @@
 ;;; CONVENIENCE MACROS
 ;;; ============================================================================
 
-(defmacro! with-reactive-bindings ((controller) &body body)
-  "Execute body with all bindings from a reactive-let controller bound locally.
+(defmacro with-reactive-bindings ((controller &rest names) &body body)
+  "Execute body with the named bindings of a reactive-let controller bound
+   locally. Each NAME is fetched at runtime via (funcall controller :get
+   'NAME). NAMES must be enumerated explicitly so the macro never has
+   to evaluate CONTROLLER at compile time — only literal-form
+   controllers would survive that, and silent macro-time evaluation of
+   a runtime variable hides symbol-resolution failures behind generic
+   compile-time errors.
 
    Example:
      (let ((ctrl (reactive-let ((x 1) (y 2)) (+ x y))))
-       (with-reactive-bindings (ctrl)
+       (with-reactive-bindings (ctrl x y)
          (format t \"x=~A y=~A\" x y)))"
-  (let ((bindings (funcall (eval controller) :inspect)))
-    `(let ,(mapcar (lambda (b) `(,(car b) (funcall ,controller :get ',(car b))))
-                   (getf bindings :bindings))
-       ,@body)))
+  (let ((c (gensym "CTRL")))
+    `(let ((,c ,controller))
+       (let ,(mapcar (lambda (n) `(,n (funcall ,c :get ',n))) names)
+         ,@body))))
 
 ;;; ============================================================================
 ;;; ANALYSIS UTILITIES (Exported for debugging/introspection)

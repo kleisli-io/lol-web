@@ -1,10 +1,10 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/REALTIME; Base: 10 -*-
 ;;;; WebSocket support for lol-reactive via websocket-driver
 ;;;;
 ;;;; Provides WebSocket connection management and message broadcasting
 ;;;; for real-time bidirectional communication.
 
-(in-package :lol-reactive)
+(in-package :lol-web/realtime)
 
 ;;; ============================================================================
 ;;; CONNECTION REGISTRY
@@ -111,10 +111,7 @@
 
 (defun ws-send-json (ws data)
   "Send data as JSON to a WebSocket connection."
-  (ws-send-text ws
-    (if (and (consp data) (consp (car data)) (keywordp (caar data)))
-        (cl-json:encode-json-alist-to-string data)
-        (cl-json:encode-json-to-string data))))
+  (ws-send-text ws (encode-json-string data)))
 
 (defun ws-close (ws &key code reason)
   "Close a WebSocket connection."
@@ -142,10 +139,7 @@
 
 (defun ws-broadcast-json (channel data)
   "Broadcast data as JSON to all connections on a channel."
-  (ws-broadcast channel
-    (if (and (consp data) (consp (car data)) (keywordp (caar data)))
-        (cl-json:encode-json-alist-to-string data)
-        (cl-json:encode-json-to-string data))))
+  (ws-broadcast channel (encode-json-string data)))
 
 (defun ws-broadcast-all (message)
   "Broadcast a message to ALL WebSocket connections across all channels."
@@ -212,9 +206,9 @@
    Example:
      (defws \"/ws/notifications\" \"notifications\"
        :on-message (lambda (ws msg)
-                     (let ((data (cl-json:decode-json-from-string msg)))
+                     (let ((data (decode-json-string msg)))
                        (handle-notification ws data))))"
-  `(setf (gethash (cons :get ,path) *routes*)
+  `(setf (gethash (cons :get ,path) *streaming-routes*)
          (make-ws-handler ,channel
                           :on-open ,on-open
                           :on-message ,on-message

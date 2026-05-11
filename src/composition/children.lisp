@@ -1,8 +1,8 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/CORE; Base: 10 -*-
 ;;;; Children and Slots System
 ;;;; Enables React-style children passing and Vue-style named slots
 
-(in-package :lol-reactive)
+(in-package :lol-web/core)
 
 ;;; ============================================================================
 ;;; CHILDREN RENDERING

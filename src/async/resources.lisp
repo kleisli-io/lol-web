@@ -1,4 +1,4 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/RESOURCES; Base: 10 -*-
 ;;;; async/resources.lisp - Async Data Resources with Loading States
 ;;;;
 ;;;; PURPOSE:
@@ -15,7 +15,7 @@
 ;;;;   - Memory and session caching
 ;;;;   - Automatic retry support
 
-(in-package :lol-reactive)
+(in-package :lol-web/resources)
 
 ;;; ============================================================================
 ;;; RESOURCE REGISTRY

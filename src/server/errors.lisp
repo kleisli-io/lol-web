@@ -6,7 +6,7 @@
 ;;;; - log-error: Structured error logging
 ;;;; - render-error-page: User-friendly error pages with fallbacks
 
-(in-package :lol-reactive)
+(in-package :lol-web/server)
 
 ;;; ═══════════════════════════════════════════════════════════════════════════
 ;;; Configuration
@@ -69,28 +69,21 @@
 ;;; ═══════════════════════════════════════════════════════════════════════════
 
 (defun minimal-error-html (title heading message &optional debug-info)
-  "Generate minimal error page HTML that cannot fail (no external dependencies).
-   Uses CSS variables from design tokens for visual consistency.
-   Error pages are generic - apps can override *colors* and *typography* to
-   change their appearance."
+  "Generate minimal error page HTML with no dependencies on app state.
+   Uses inline neutral CSS values rather than design tokens — error pages
+   must render even if *colors* / *typography* are unbound or partially
+   initialised. Apps that want themed error pages should compose their
+   own renderer rather than override the fallback."
   (format nil "<!DOCTYPE html>
 <html lang=\"en\">
 <head>
 <meta charset=\"utf-8\">
 <title>~A</title>
 <style>
-:root {
-  --color-background: ~A;
-  --color-surface: ~A;
-  --color-text: ~A;
-  --color-muted: ~A;
-  --color-primary: ~A;
-  --font-family: ~A;
-}
 body {
-  background: var(--color-background);
-  color: var(--color-text);
-  font-family: var(--font-family);
+  background: #ffffff;
+  color: #1a1a1a;
+  font-family: system-ui, -apple-system, sans-serif;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -98,18 +91,18 @@ body {
   margin: 0;
 }
 .container { text-align: center; max-width: 600px; padding: 2rem; }
-h1 { color: var(--color-primary); font-size: 3rem; margin: 0 0 1rem 0; }
-p { color: var(--color-muted); margin: 1rem 0; line-height: 1.6; }
-a { color: var(--color-primary); text-decoration: none; }
+h1 { color: #000000; font-size: 3rem; margin: 0 0 1rem 0; }
+p { color: #666666; margin: 1rem 0; line-height: 1.6; }
+a { color: #0066cc; text-decoration: none; }
 a:hover { text-decoration: underline; }
 pre {
-  background: var(--color-surface);
+  background: #f5f5f5;
   padding: 1rem;
   border-radius: 4px;
   overflow-x: auto;
   text-align: left;
   font-size: 0.85rem;
-  color: var(--color-muted);
+  color: #666666;
   margin-top: 2rem;
 }
 </style>
@@ -124,14 +117,6 @@ pre {
 </body>
 </html>"
           title
-          ;; Inject token values as CSS variables
-          (get-color :background)
-          (get-color :surface)
-          (get-color :text)
-          (get-color :muted)
-          (get-color :primary)
-          (get-font :family)
-          ;; Content
           heading
           message
           (if debug-info
@@ -179,6 +164,11 @@ pre {
     `(let ((,context-var ,context))
        (handler-case
            (progn ,@body)
+         (http-error (e)
+           ;; Application-signalled status — short-circuit without a backtrace.
+           (error-response (http-error-status e)
+                           :message (or (http-error-body e)
+                                        (http-status-text (http-error-status e)))))
          (error (e)
            ;; Log the error
            (log-error ,context-var e)

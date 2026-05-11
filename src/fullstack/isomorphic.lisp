@@ -1,4 +1,4 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/FULLSTACK; Base: 10 -*-
 ;;;; fullstack/isomorphic.lisp - Isomorphic Components (Server + Client)
 ;;;;
 ;;;; PURPOSE:
@@ -14,7 +14,7 @@
 ;;;;   - State serialization in data attributes
 ;;;;   - Hydration script to resume component
 
-(in-package :lol-reactive)
+(in-package :lol-web/fullstack)
 
 ;;; ============================================================================
 ;;; STATE SERIALIZATION
@@ -22,7 +22,7 @@
 
 (defun serialize-state (state)
   "Serialize component state to JSON string for embedding in HTML."
-  (cl-json:encode-json-to-string state))
+  (encode-json-string state))
 
 (defun serialize-state-for-attr (state)
   "Serialize state and escape for HTML attribute."
@@ -30,7 +30,7 @@
 
 (defun deserialize-state (json-string)
   "Deserialize JSON state string back to Lisp."
-  (cl-json:decode-json-from-string json-string))
+  (decode-json-string json-string))
 
 ;;; ============================================================================
 ;;; HYDRATION SCRIPT GENERATION
@@ -180,7 +180,7 @@
   (if args
       (format nil "data-action=\"~A\" data-args=\"~A\""
               (string-downcase action)
-              (escape-html (cl-json:encode-json-to-string args)))
+              (escape-html (encode-json-string args)))
       (format nil "data-action=\"~A\"" (string-downcase action))))
 
 ;;; ============================================================================
@@ -210,8 +210,8 @@
                                        "[data-component-id]")))
                         ((ps:@ elements for-each)
                          (lambda (el)
-                           (let ((id ((ps:@ elget-attribute) "data-component-id"))
-                                 (name ((ps:@ elget-attribute) "data-component")))
+                           (let ((id ((ps:@ el get-attribute) "data-component-id"))
+                                 (name ((ps:@ el get-attribute) "data-component")))
                              ((ps:@ console log) "(hydrating:" id name ")"))))))))))
 
 (defun include-hydration-runtime ()

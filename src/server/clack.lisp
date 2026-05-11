@@ -1,10 +1,10 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/SERVER; Base: 10 -*-
 ;;;; Clack request/response abstraction layer
 ;;;;
 ;;;; Provides a clean API over Clack's env plist for request handling
 ;;;; and standardized response builders.
 
-(in-package :lol-reactive)
+(in-package :lol-web/server)
 
 ;;; ============================================================================
 ;;; REQUEST ENVIRONMENT
@@ -51,29 +51,132 @@
   (getf *env* :content-length))
 
 (defun request-body ()
-  "Get raw request body as string.
-   Reads from the :raw-body stream if present."
-  (let ((body-stream (getf *env* :raw-body)))
-    (when body-stream
-      (let ((content-length (request-content-length)))
-        (if content-length
-            ;; Read exact length if known
-            (let ((octets (make-array content-length :element-type '(unsigned-byte 8))))
-              (read-sequence octets body-stream)
-              (babel:octets-to-string octets :encoding :utf-8))
-            ;; Read until EOF
-            (let ((octets (alexandria:read-stream-content-into-byte-vector body-stream)))
-              (when (> (length octets) 0)
-                (babel:octets-to-string octets :encoding :utf-8))))))))
+  "Get raw request body as a UTF-8 decoded string.
+   Prefers the cached octet vector populated by build-clack-env so that
+   repeated calls return the same body — historically reading :raw-body
+   as a stream would silently return NIL on second access. Falls back
+   to draining :raw-body for environments that bypass build-clack-env."
+  (let ((cached (getf *env* :lol/cached-body)))
+    (cond
+      (cached
+       (babel:octets-to-string cached :encoding :utf-8))
+      (t
+       (let ((body-stream (getf *env* :raw-body)))
+         (when body-stream
+           (let ((content-length (request-content-length)))
+             (if content-length
+                 (let ((octets (make-array content-length :element-type '(unsigned-byte 8))))
+                   (read-sequence octets body-stream)
+                   (babel:octets-to-string octets :encoding :utf-8))
+                 (let ((octets (alexandria:read-stream-content-into-byte-vector body-stream)))
+                   (when (> (length octets) 0)
+                     (babel:octets-to-string octets :encoding :utf-8)))))))))))
+
+;;; ============================================================================
+;;; JSON ENCODE / DECODE
+;;; ============================================================================
+;;;
+;;; The public API is encode-json-string and decode-json-string. Decoded values
+;;; come back as alists with kebab-cased keyword keys, lists for arrays, and
+;;; NIL for null. Encoding accepts the same shape: alists become JSON objects,
+;;; proper lists become arrays, NIL becomes null. The internal helpers below
+;;; bridge between this shape and the underlying jzon parser/stringifier.
+
+(defun %camel-to-kebab-keyword (s)
+  "Map a JSON object key string to a Lisp keyword by inserting a hyphen at
+   each lowercase→uppercase boundary, then upcasing. \"componentId\" → :COMPONENT-ID."
+  (intern
+   (with-output-to-string (out)
+     (loop for c across s
+           for i from 0
+           do (when (and (> i 0)
+                         (upper-case-p c)
+                         (lower-case-p (char s (1- i))))
+                (write-char #\- out))
+              (write-char (char-upcase c) out)))
+   :keyword))
+
+(defun %jzon-to-alist-shape (elt)
+  "Recursively convert a jzon-parsed element to the public decode shape:
+   alists with keyword keys, lists for arrays, NIL for null."
+  (cond
+    ((stringp elt) elt)
+    ((hash-table-p elt)
+     (loop for k being the hash-keys of elt using (hash-value v)
+           collect (cons (%camel-to-kebab-keyword k)
+                         (%jzon-to-alist-shape v))))
+    ((vectorp elt)
+     (map 'list #'%jzon-to-alist-shape elt))
+    ((eq elt 'null) nil)
+    (t elt)))
+
+(defun %alist-of-conses-p (x)
+  "True iff X is a non-empty list whose every element is (atom . anything).
+   Heuristic for treating X as an alist-encoded JSON object."
+  (and (consp x)
+       (every (lambda (cell) (and (consp cell) (atom (car cell)))) x)))
+
+(defun %coerce-key-to-string (k)
+  (cond ((stringp k) k)
+        ((keywordp k) (string-downcase (symbol-name k)))
+        ((symbolp k) (string-downcase (symbol-name k)))
+        (t (princ-to-string k))))
+
+(defun %coerce-for-jzon (x)
+  "Recursively coerce alist/list/scalar shapes into jzon-encodable forms.
+   Alists → hash-tables (string keys), proper lists → vectors, NIL → null."
+  (cond
+    ((null x) 'null)
+    ((eq x t) t)
+    ((hash-table-p x) x)
+    ((stringp x) x)
+    ((numberp x) x)
+    ((%alist-of-conses-p x)
+     (let ((ht (make-hash-table :test 'equal)))
+       (dolist (cell x ht)
+         (setf (gethash (%coerce-key-to-string (car cell)) ht)
+               (%coerce-for-jzon (cdr cell))))))
+    ((vectorp x) (map 'vector #'%coerce-for-jzon x))
+    ((listp x) (map 'vector #'%coerce-for-jzon x))
+    ((symbolp x) (string-downcase (symbol-name x)))
+    (t x)))
+
+(defun encode-json-string (data)
+  "Encode DATA to a JSON string. Auto-detects alists and encodes them as
+   JSON objects; encodes proper lists as arrays; NIL as null; T as true."
+  (com.inuoe.jzon:stringify (%coerce-for-jzon data)))
+
+(defun decode-json-string (string)
+  "Parse STRING as JSON. Returns alists with kebab-cased keyword keys,
+   lists for arrays, NIL for null. Returns NIL on empty or malformed input."
+  (when (and string (> (length string) 0))
+    (handler-case
+        (%jzon-to-alist-shape (com.inuoe.jzon:parse string))
+      (com.inuoe.jzon:json-error () nil))))
+
+(defun parse-request-json ()
+  "Parse the request body as JSON, memoizing the result in *env* under
+   :lol/cached-body-json. Returns NIL if the body is empty or not valid JSON.
+
+   Single chokepoint for JSON-body parsing: every caller (request-body-json
+   and the :json-body extractor in :lol-web/extractors) routes through this
+   one to avoid double-decoding the same request payload. Returns the alist
+   shape produced by decode-json-string so callers can use
+   (cdr (assoc :foo body-json))."
+  (let ((cached (getf *env* :lol/cached-body-json 'unbound)))
+    (if (eq cached 'unbound)
+        (let ((parsed (decode-json-string (request-body))))
+          ;; Cache even NIL so a malformed body doesn't get re-parsed on
+          ;; every accessor call.
+          (setf (getf *env* :lol/cached-body-json) parsed)
+          parsed)
+        cached)))
 
 (defun request-body-json ()
-  "Parse request body as JSON.
-   Returns NIL if body is empty or not valid JSON."
-  (let ((body (request-body)))
-    (when (and body (> (length body) 0))
-      (handler-case
-          (cl-json:decode-json-from-string body)
-        (error () nil)))))
+  "Parse request body as JSON. Returns NIL if body is empty or not valid JSON.
+   Memoized via parse-request-json — calling this multiple times in one
+   request hits the cache after the first decode."
+  (parse-request-json))
 
 ;;; ============================================================================
 ;;; PARAMETER ACCESSORS
@@ -147,7 +250,7 @@
   (response status
             :content-type "application/json; charset=utf-8"
             :headers headers
-            :body (cl-json:encode-json-to-string data)))
+            :body (encode-json-string data)))
 
 (defun text-response (body &key (status 200) headers)
   "Build a plain text response.
@@ -286,12 +389,3 @@
    Works with both Lack CSRF middleware and custom CSRF (security.lisp).
    Returns NIL if session not available."
   (session-get "csrf-token"))
-
-(defun csrf-input ()
-  "Generate hidden CSRF input field for forms.
-   Uses unified 'csrf-token' field name (matching security.lisp and configured middleware).
-   Returns HTML string or empty string if no token."
-  (let ((token (csrf-token)))
-    (if token
-        (format nil "<input type=\"hidden\" name=\"csrf-token\" value=\"~A\">" token)
-        "")))

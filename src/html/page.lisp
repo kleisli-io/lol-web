@@ -1,4 +1,4 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/HTML; Base: 10 -*-
 ;;;; HTML page template using cl-who
 ;;;;
 ;;;; GENERIC INFRASTRUCTURE - NO hardcoded colors, fonts, or theme styles.
@@ -8,7 +8,7 @@
 ;;;; component->html), highlight-sexp, and cl-who config live in html/elements.lisp.
 ;;;; This file provides only the full-page template and client-side runtime.
 
-(in-package :lol-reactive)
+(in-package :lol-web/html)
 
 ;;; ============================================================================
 ;;; PAGE TEMPLATE (GENERIC)
@@ -28,6 +28,15 @@
                        (include-tailwind t)
                        (include-htmx t)
                        (include-surgery nil)
+                       tailwind-script
+                       base-css
+                       component-css
+                       htmx-indicator-css
+                       csrf-token
+                       reactive-runtime
+                       htmx-runtime
+                       surgery-css
+                       surgery-runtime
                        description
                        canonical
                        (og-type "website")
@@ -41,7 +50,23 @@
 
    NO hardcoded colors, fonts, or styles - apps provide their own theme.
 
-   Options:
+   Asset strings — each, when non-NIL, is emitted verbatim into the page;
+   NIL means the corresponding asset block is omitted. There are no
+   internal helper fallbacks: this file stays decoupled from the css/htmx/
+   server/devtools sub-systems, so callers must pre-compute and pass:
+   - TAILWIND-SCRIPT: Tailwind config JS
+   - BASE-CSS: token-derived CSS variables
+   - COMPONENT-CSS: registered component CSS
+   - HTMX-INDICATOR-CSS: HTMX indicator CSS (only honoured when INCLUDE-HTMX)
+   - CSRF-TOKEN: CSRF token string for the meta tag (only when INCLUDE-HTMX)
+   - REACTIVE-RUNTIME: Parenscript reactive runtime JS
+   - HTMX-RUNTIME: Parenscript HTMX runtime JS (only when INCLUDE-HTMX)
+   - SURGERY-CSS, SURGERY-RUNTIME: surgery panel assets (only when INCLUDE-SURGERY)
+
+   This contract lets the html sub-system build standalone — it depends
+   only on :lol-web/sanitize and cl-who, never on css/htmx/server/devtools.
+
+   Other options:
    - TITLE: Page title
    - LANG: HTML lang attribute (default \"en\")
    - BODY-CLASS: Additional body CSS classes
@@ -99,28 +124,25 @@
        (when (and include-tailwind (not css-href))
          (cl-who:htm
           (:script :src "https://cdn.tailwindcss.com")
-          (:script (cl-who:str (tailwind-config)))))
+          (when tailwind-script
+            (cl-who:htm (:script (cl-who:str tailwind-script))))))
 
-       ;; CSS variables from tokens
-       (:style (cl-who:str (generate-css-variables)))
+       ;; CSS variables from tokens — caller pre-computes via :lol-web/css.
+       (when base-css
+         (cl-who:htm (:style (cl-who:str base-css))))
 
-       ;; Registered component CSS
-       (:style (cl-who:str (generate-all-component-css)))
+       ;; Registered component CSS — caller pre-computes via :lol-web/css.
+       (when component-css
+         (cl-who:htm (:style (cl-who:str component-css))))
 
-       ;; HTMX indicator styles
-       (when include-htmx
-         (cl-who:htm
-          (:style (cl-who:str (htmx-indicator-css)))))
+       ;; HTMX indicator styles — caller pre-computes via :lol-web/htmx.
+       (when (and include-htmx htmx-indicator-css)
+         (cl-who:htm (:style (cl-who:str htmx-indicator-css))))
 
-       ;; CSRF meta tag for HTMX runtime (reads token from session if available)
-       (when include-htmx
-         (handler-case
-             (let ((token (get-csrf-token)))
-               (when token
-                 (cl-who:htm
-                  (:meta :name "csrf-token" :content token))))
-           ;; No session available (e.g., no session middleware) — skip
-           (error () nil)))
+       ;; CSRF meta tag for HTMX runtime — caller passes the session token
+       ;; (e.g., (lol-web/server:get-csrf-token)).
+       (when (and include-htmx csrf-token)
+         (cl-who:htm (:meta :name "csrf-token" :content csrf-token)))
 
        ;; App-provided head content
        (cl-who:str (or head-extra "")))
@@ -129,19 +151,19 @@
         ;; Main content
         (cl-who:str (or body ""))
 
-        ;; Reactive runtime script (Parenscript)
-        (:script (cl-who:str (reactive-runtime-js)))
+        ;; Reactive runtime script (Parenscript). Same-package fallback —
+        ;; reactive-runtime-js is defined below in :lol-web/html.
+        (:script (cl-who:str (or reactive-runtime (reactive-runtime-js))))
 
-        ;; HTMX runtime (optional, default on)
-        (when include-htmx
-          (cl-who:htm
-           (:script (cl-who:str (htmx-runtime-js)))))
+        ;; HTMX runtime — caller pre-computes via :lol-web/htmx.
+        (when (and include-htmx htmx-runtime)
+          (cl-who:htm (:script (cl-who:str htmx-runtime))))
 
-        ;; Surgery panel (optional)
-        (when include-surgery
-          (cl-who:htm
-           (:style (cl-who:str (surgery-css)))
-           (:script (cl-who:str (surgery-runtime-js)))))))))
+        ;; Surgery panel — caller pre-computes via :lol-web/devtools.
+        (when (and include-surgery surgery-css)
+          (cl-who:htm (:style (cl-who:str surgery-css))))
+        (when (and include-surgery surgery-runtime)
+          (cl-who:htm (:script (cl-who:str surgery-runtime))))))))
 
 ;;; ============================================================================
 ;;; REACTIVE RUNTIME (Parenscript)

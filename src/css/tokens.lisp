@@ -1,27 +1,17 @@
-;;;; css/tokens.lisp - Design token system using Let Over Lambda patterns
+;;;; css/tokens.lisp - Design token system
 ;;;;
-;;;; PURPOSE:
-;;;;   Design tokens as introspectable closures with validation and suggestions.
-;;;;   Each token set responds to messages (:get, :set, :validate, :inspect, :all).
-;;;;   Provides Levenshtein-distance "Did you mean?" suggestions for typos.
+;;;; Design tokens are alists of (keyword . string) pairs held in dynamic
+;;;; variables (`*colors*`, `*typography*`, `*spacing*`, `*effects*`) that
+;;;; apps and tests rebind per-request. `validate-token` provides
+;;;; Levenshtein-distance "Did you mean?" feedback on bad keys.
 ;;;;
-;;;; USAGE:
-;;;;   ;; Create a token set
-;;;;   (defvar *my-colors*
-;;;;     (make-token-set :colors
-;;;;       '((:primary . "#00FF41")
-;;;;         (:secondary . "#FF006E"))))
-;;;;
-;;;;   (funcall *my-colors* :get :primary)     ; => "#00FF41"
-;;;;   (funcall *my-colors* :set :primary "#FF0000")
-;;;;   (funcall *my-colors* :validate :primry) ; => Error: Did you mean :primary?
-;;;;   (funcall *my-colors* :inspect)          ; => Full state dump
-;;;;
-;;;; GLOBAL TOKENS:
-;;;;   *colors*, *typography*, *spacing*, *effects* - Current active tokens
-;;;;   *default-colors*, etc. - Immutable defaults
+;;;; The alist representation is intentional: it preserves printability,
+;;;; equality, compile-time availability for `optimization/template-validation`,
+;;;; and per-thread `let`-rebinding. The accessors (`get-color`, `get-font`,
+;;;; `get-spacing`, `get-effect`) and the parenscript-side `tailwind-config`
+;;;; iterate the alists directly.
 
-(in-package :lol-reactive)
+(in-package :lol-web/css)
 
 ;;; ─────────────────────────────────────────────────────────────────────────────
 ;;; Levenshtein Distance Algorithm
@@ -87,76 +77,6 @@
         (error "Invalid ~A token: ~A. Did you mean: ~A?"
                token-type-name token closest)))
     token))
-
-;;; ─────────────────────────────────────────────────────────────────────────────
-;;; Token Set Factory (Let Over Lambda Pattern)
-;;; ─────────────────────────────────────────────────────────────────────────────
-
-(defun make-token-set (name initial-tokens)
-  "Create a token set with pandoric introspection.
-
-   NAME: Keyword identifying the set (e.g., :colors)
-   INITIAL-TOKENS: Alist of (keyword . value) pairs
-
-   Returns a dlambda responding to:
-     :name      - Get set name
-     :get       - Get token value (validates)
-     :get-raw   - Get token value (no validation, returns nil if missing)
-     :set       - Set token value
-     :all       - Get all tokens as alist
-     :keys      - Get all token keys
-     :validate  - Validate token exists (returns token or errors)
-     :merge     - Merge additional tokens
-     :inspect   - Full state dump
-
-   Example:
-   (make-token-set :colors
-     '((:primary . \"#00FF41\")
-       (:secondary . \"#FF006E\")))"
-  (let ((set-name name)
-        (tokens (copy-alist initial-tokens))
-        (created-at (get-universal-time)))
-    (dlambda
-      (:name () set-name)
-
-      (:get (key)
-       (validate-token key tokens (symbol-name set-name))
-       (cdr (assoc key tokens)))
-
-      (:get-raw (key)
-       (cdr (assoc key tokens)))
-
-      (:set (key value)
-       (let ((entry (assoc key tokens)))
-         (if entry
-             (setf (cdr entry) value)
-             (push (cons key value) tokens)))
-       value)
-
-      (:all () tokens)
-
-      (:keys () (mapcar #'car tokens))
-
-      (:validate (key)
-       (validate-token key tokens (symbol-name set-name)))
-
-      (:merge (new-tokens)
-       (iter (for (key . value) in new-tokens)
-         (let ((entry (assoc key tokens)))
-           (if entry
-               (setf (cdr entry) value)
-               (push (cons key value) tokens))))
-       tokens)
-
-      (:inspect ()
-       (list :name set-name
-             :created-at created-at
-             :token-count (length tokens)
-             :tokens tokens))
-
-      (otherwise (message &rest args)
-       (declare (ignore args))
-       (error "Unknown token-set message: ~S" message)))))
 
 ;;; ─────────────────────────────────────────────────────────────────────────────
 ;;; Default Token Definitions

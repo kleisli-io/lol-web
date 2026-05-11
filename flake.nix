@@ -1,8 +1,7 @@
 {
-  description = "lol-reactive — reactive web framework using Let Over Lambda patterns";
+  description = "lol-web — reactive web framework using Let Over Lambda patterns";
 
   inputs = {
-    # Pinned to same nixpkgs as core depot — SBCL 2.5.7
     nixpkgs.url = "github:NixOS/nixpkgs/88d3861acdd3d2f0e361767018218e51810df8a1";
     cl-deps.url = "github:kleisli-io/cl-deps";
     cl-deps.inputs.nixpkgs.follows = "nixpkgs";
@@ -10,159 +9,73 @@
 
   outputs = { self, nixpkgs, cl-deps, ... }:
     let
-      forAllSystems = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      forAllSystems = nixpkgs.lib.genAttrs [
+        "x86_64-linux" "aarch64-linux"
+        "x86_64-darwin" "aarch64-darwin"
+      ];
+
+      ## Map module-table.nix's external-deps names onto the cl-deps lisp
+      ## attribute set. The names lol-web uses internally (clack-session,
+      ## clack-csrf, clack-static, clack-accesslog, clack-cors, lack-core)
+      ## predate cl-deps's flat upstream-aligned naming, so the mapping
+      ## bridges the two vocabularies.
+      mkLispDepsByName = lisp: with lisp; {
+        inherit alexandria iterate cl-ppcre babel
+                ironclad bordeaux-threads
+                let-over-lambda
+                cl-who parenscript jzon hunchentoot
+                flexi-streams puri
+                clack clack-handler-hunchentoot
+                websocket-driver-server;
+        lack-core         = lack;
+        clack-session     = lack-middleware-session;
+        clack-csrf        = lack-middleware-csrf;
+        clack-static      = lack-middleware-static;
+        clack-accesslog   = lack-middleware-accesslog;
+        clack-cors        = lack-middleware-cors;
+      };
+
+      ## Build per system. `built.library` is the umbrella derivation with
+      ## tests + passthru.asdfDriftCheck. `built.modules` is an attrset of
+      ## per-sub-system standalone derivations keyed by short name (e.g.,
+      ## "server", "extractors").
+      buildFor = system:
+        let
+          inherit (cl-deps.lib.${system}) buildLisp lisp;
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+          import ./nix/build.nix {
+            inherit buildLisp pkgs;
+            srcDir = ./.;
+            lispDepsByName = mkLispDepsByName lisp;
+            testDeps = [ lisp.fiveam ];
+          };
     in {
-      lib = forAllSystems (system:
+      lib = forAllSystems (system: {
+        library = (buildFor system).library;
+        modules = (buildFor system).modules;
+      });
+
+      packages = forAllSystems (system: {
+        default = (buildFor system).library;
+      });
+
+      ## Every per-sub-system derivation, the umbrella, and the ASDF
+      ## manifest drift check are exposed as flake checks so
+      ## `nix flake check` exercises the complete build matrix in one
+      ## invocation (CI's gate). Sub-system check names are prefixed
+      ## with `module-` so the umbrella's plain `library` attr stays
+      ## discoverable in `nix flake show`.
+      checks = forAllSystems (system:
         let
-          inherit (cl-deps.lib.${system}) buildLisp lisp;
-        in {
-          library = buildLisp.library {
-            name = "lol-reactive";
-
-            deps = with lisp; [
-              # Core dependencies
-              alexandria iterate cl-ppcre babel
-
-              # Let Over Lambda
-              let-over-lambda
-
-              # Web stack
-              cl-who parenscript cl-json hunchentoot
-              clack lack
-
-              # Lack middlewares
-              lack-middleware-session
-              lack-middleware-csrf
-              lack-middleware-static
-              lack-middleware-accesslog
-
-              # Clack handler
-              clack-handler-hunchentoot
-
-              # WebSocket support
-              websocket-driver-server
-            ];
-
-            srcs = map (f: ./. + "/${f}") [
-              # Package definition
-              "src/package.lisp"
-
-              # CSS infrastructure
-              "src/css/registry.lisp"
-              "src/css/tokens.lisp"
-              "src/css/generation.lisp"
-              "src/css/tailwind.lisp"
-
-              # Core reactive primitives
-              "src/core/components.lisp"
-              "src/core/signals.lisp"
-              "src/core/state.lisp"
-              "src/core/collections.lisp"
-
-              # HTML generation (elements first — defines htm, htm-str, etc.)
-              "src/html/elements.lisp"
-              "src/html/page.lisp"
-              "src/html/escape.lisp"
-
-              # Client-side utilities
-              "src/client/parenscript.lisp"
-
-              # HTMX runtime + extensions
-              "src/htmx/runtime.lisp"
-              "src/htmx/oob.lisp"
-              "src/htmx/autocomplete.lisp"
-              "src/htmx/server.lisp"
-              "src/htmx/morph.lisp"
-
-              # Server infrastructure (Clack-based)
-              "src/server/clack.lisp"
-              "src/server/security.lisp"
-              "src/server/errors.lisp"
-              "src/server/app.lisp"
-              "src/server/routes.lisp"
-
-              # Composition (props, context, children)
-              "src/composition/props.lisp"
-              "src/composition/context.lisp"
-              "src/composition/children.lisp"
-
-              # Forms and async
-              "src/forms/form-dsl.lisp"
-              "src/async/resources.lisp"
-
-              # Advanced features
-              "src/advanced/wizards.lisp"
-
-              # Real-time features (server-side WebSocket + SSE)
-              "src/realtime/websocket.lisp"
-              "src/realtime/sse.lisp"
-
-              # Real-time client runtimes (Parenscript)
-              "src/realtime/ws-client.lisp"
-              "src/realtime/sse-client.lisp"
-              "src/realtime/optimistic.lisp"
-
-              # Development tools
-              "src/devtools/surgery.lisp"
-              "src/devtools/surgery-js.lisp"
-
-              # Rendering infrastructure
-              "src/rendering/dom-diff.lisp"
-              "src/rendering/keyed-list.lisp"
-
-              # Fullstack (isomorphic components)
-              "src/fullstack/component-api.lisp"
-              "src/fullstack/isomorphic.lisp"
-
-              # Optimization (compile-time analysis)
-              "src/optimization/reactive-analysis.lisp"
-              "src/optimization/template-validation.lisp"
-
-              # Combined client runtime (must be last — aggregates all JS)
-              "src/client/runtime.lisp"
-            ];
-
-            # FiveAM test suite - build fails if tests don't pass
-            tests = {
-              deps = [ lisp.fiveam ];
-              srcs = map (f: ./t + "/${f}") [
-                "package.lisp"
-                "suite.lisp"
-                "signals.lisp"
-                "components.lisp"
-                "surgery.lisp"
-                "dom-diff.lisp"
-                "keyed-list.lisp"
-                "wizards.lisp"
-                "htmx.lisp"
-                "server.lisp"
-                "parenscript.lisp"
-                "regression.lisp"
-              ];
-              expression = "(lol-reactive.tests:run-all-tests)";
-            };
-          };
-        });
-
-      packages = forAllSystems (system:
-        let
-          inherit (cl-deps.lib.${system}) buildLisp lisp;
-          library = self.lib.${system}.library;
-        in {
-          default = library;
-
-          demo = buildLisp.program {
-            name = "lol-reactive-demo";
-            deps = [ library ];
-            srcs = [
-              ./demo/package.lisp
-              ./demo/theme.lisp
-              ./demo/app.lisp
-              ./demo/showcase.lisp
-              ./demo/main.lisp
-            ];
-            main = "lol-reactive-demo:main";
-          };
-        });
+          built = buildFor system;
+          moduleChecks = nixpkgs.lib.mapAttrs'
+            (name: drv: nixpkgs.lib.nameValuePair "module-${name}" drv)
+            built.modules;
+        in
+          moduleChecks // {
+            library    = built.library;
+            asdf-drift = built.library.asdfDriftCheck;
+          });
     };
 }

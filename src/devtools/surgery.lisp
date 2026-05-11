@@ -1,11 +1,11 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/DEVTOOLS; Base: 10 -*-
 ;;;; Component Surgery - X-ray inspection and live modification of pandoric closures
 ;;;;
 ;;;; This is what makes LOL-REACTIVE unique: the ability to reach into any
 ;;;; component's closure, inspect its state, modify values, and even hotswap
 ;;;; behavior - all while the component is running.
 
-(in-package :lol-reactive)
+(in-package :lol-web/devtools)
 
 ;;; ============================================================================
 ;;; SNAPSHOT SYSTEM
@@ -19,6 +19,19 @@
 
 (defparameter *max-snapshots-per-component* 20
   "Maximum number of snapshots to keep per component.")
+
+(defun normalize-state-pairs (pairs)
+  "Normalize state PAIRS to alist form ((key . value) ...).
+
+   Components produced by DEFCOMPONENT (core) report :state as an alist of cons
+   pairs; components produced by DEFCOMPONENT-WITH-API (fullstack) report :state
+   as a flat plist of alternating keyword/value. Surgery code consumes both via
+   this normalizer."
+  (cond
+    ((null pairs) nil)
+    ((consp (first pairs)) pairs)
+    (t (loop for (key value) on pairs by #'cddr
+             collect (cons key value)))))
 
 (defun capture-snapshot (component &optional description)
   "Capture current component state as a restorable snapshot.
@@ -54,14 +67,10 @@
 (defun restore-snapshot (component timestamp)
   "Restore component to a previous snapshot state.
    Uses with-pandoric to surgically update each state variable."
-  (let* ((snapshot (find-snapshot component timestamp))
-         (state-alist (getf snapshot :state)))
+  (let ((snapshot (find-snapshot component timestamp)))
     (when snapshot
-      ;; Iterate through saved state and restore each value
-      (dolist (pair state-alist)
-        (let ((key (car pair))
-              (value (cdr pair)))
-          (funcall component :set-state key value)))
+      (dolist (pair (normalize-state-pairs (getf snapshot :state)))
+        (funcall component :set-state (car pair) (cdr pair)))
       t)))
 
 (defun clear-snapshots (component)
@@ -87,7 +96,7 @@
                            `((:key . ,(car pair))
                              (:value . ,(format-value-for-json (cdr pair)))
                              (:type . ,(type-of-value (cdr pair)))))
-                         (getf inspection :state))))))
+                         (normalize-state-pairs (getf inspection :state)))))))
 
 (defun format-value-for-json (value)
   "Format a Lisp value for JSON representation."
@@ -181,34 +190,6 @@
     (when component
       (apply component :dispatch action args)
       (component-state-tree component))))
-
-;;; ============================================================================
-;;; BEHAVIOR HOTSWAP
-;;;
-;;; Replace a component's behavior while it's running.
-;;; The ultimate Let Over Lambda trick.
-;;; ============================================================================
-
-(defparameter *behavior-presets* (make-hash-table :test 'equal)
-  "Named behavior presets for hotswapping.")
-
-(defun register-behavior-preset (name component-type dispatch-fn)
-  "Register a behavior preset that can be hotswapped into components."
-  (setf (gethash (cons component-type name) *behavior-presets*)
-        dispatch-fn))
-
-(defun list-behavior-presets (component-type)
-  "List available behavior presets for a component type."
-  (let ((presets '()))
-    (maphash (lambda (key value)
-               (declare (ignore value))
-               (when (eq (car key) component-type)
-                 (push (cdr key) presets)))
-             *behavior-presets*)
-    presets))
-
-;; Note: Actual hotswap requires pandoric-hotpatch which modifies 'this'
-;; in the closure. We'd need to extend defcomponent to support this.
 
 ;;; ============================================================================
 ;;; SURGERY X-RAY COMPONENT
@@ -334,12 +315,16 @@
   "When true, all components render with x-ray wrappers.")
 
 (defun enable-surgery-mode ()
-  "Enable global surgery mode."
-  (setf *surgery-mode* t))
+  "Enable global surgery mode. Installs xray-wrapper-html as the
+   :lol-web/html component-render hook so every component->html call
+   produces a wrapper with the x-ray toggle."
+  (setf *surgery-mode* t)
+  (setf lol-web/html:*component-render-hook* #'xray-wrapper-html))
 
 (defun disable-surgery-mode ()
-  "Disable global surgery mode."
-  (setf *surgery-mode* nil))
+  "Disable global surgery mode and restore the default wrapper."
+  (setf *surgery-mode* nil)
+  (setf lol-web/html:*component-render-hook* nil))
 
 (defun surgery-mode-p ()
   "Check if surgery mode is enabled."
@@ -394,12 +379,10 @@
   "Undo the last change to a component."
   (let ((component (find-component component-id)))
     (when (and component (can-undo-p component-id))
-      ;; Push current state to redo
       (push (funcall component :inspect)
             (gethash component-id *redo-stacks*))
-      ;; Pop and restore from undo
       (let ((prev-state (pop (gethash component-id *undo-stacks*))))
-        (dolist (pair (getf prev-state :state))
+        (dolist (pair (normalize-state-pairs (getf prev-state :state)))
           (funcall component :set-state (car pair) (cdr pair))))
       (component-state-tree component))))
 
@@ -407,11 +390,9 @@
   "Redo a previously undone change."
   (let ((component (find-component component-id)))
     (when (and component (can-redo-p component-id))
-      ;; Push current state to undo
       (push (funcall component :inspect)
             (gethash component-id *undo-stacks*))
-      ;; Pop and restore from redo
       (let ((next-state (pop (gethash component-id *redo-stacks*))))
-        (dolist (pair (getf next-state :state))
+        (dolist (pair (normalize-state-pairs (getf next-state :state)))
           (funcall component :set-state (car pair) (cdr pair))))
       (component-state-tree component))))

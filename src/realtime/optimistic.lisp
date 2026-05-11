@@ -1,9 +1,9 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/REALTIME-HTMX; Base: 10 -*-
 ;;;; Optimistic update client runtime (Parenscript)
 ;;;;
 ;;;; Provides instant UI feedback before server response with automatic rollback.
 
-(in-package :lol-reactive)
+(in-package :lol-web/realtime-htmx)
 
 ;;; ============================================================================
 ;;; OPTIMISTIC UPDATE RUNTIME (Parenscript)

@@ -1,7 +1,7 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/PARENSCRIPT; Base: 10 -*-
 ;;;; Parenscript utilities for reactive client-side code generation
 
-(in-package :lol-reactive)
+(in-package :lol-web/parenscript)
 
 ;;; ============================================================================
 ;;; PARENSCRIPT HELPERS
@@ -131,7 +131,10 @@
   "Generate WebSocket client code for real-time updates."
   (ps*
     `(let ((ws (ps:new (-Web-Socket
-                        (+ "ws://" (ps:@ window location host) "/ws/" ,component-id)))))
+                        (+ (if (= (ps:@ window location protocol) "https:")
+                               "wss://"
+                               "ws://")
+                           (ps:@ window location host) "/ws/" ,component-id)))))
        (setf (ps:@ ws onmessage)
              (lambda (event)
                (let ((data (ps:chain -j-s-o-n (parse (ps:@ event data)))))
@@ -192,7 +195,8 @@
                    state-bindings))
 
        ;; Call mount
-       (ps:chain (ps:chain -lol-reactive components (get component-id)) (ps:@ :on-mount)))))
+       (funcall (ps:getprop (ps:chain -lol-reactive components (get component-id))
+                            "on-mount")))))
 
 ;;; ============================================================================
 ;;; HTMX-STYLE ATTRIBUTES (Alternative to full Parenscript)

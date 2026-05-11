@@ -15,7 +15,7 @@
 ;;;;     (funcall module :add-rule ".btn" '(("padding" . "1rem")))
 ;;;;     (funcall module :render))
 
-(in-package :lol-reactive)
+(in-package :lol-web/css)
 
 ;;; ─────────────────────────────────────────────────────────────────────────────
 ;;; CSS Rule Generation
@@ -25,7 +25,9 @@
   "Generate a CSS rule from selector and property alist.
 
    SELECTOR: CSS selector string (e.g., \".btn\", \"#header\", \"body\")
-   PROPERTIES: Alist of (property . value) pairs
+   PROPERTIES: Alist of (property . value) pairs. Keys may be strings or
+   symbols (including keywords); symbol keys are downcased to their
+   `symbol-name` so `:opacity` renders as `opacity`, not `OPACITY`.
 
    Example:
    (css-rule \".btn\" '((\"padding\" . \"1rem\") (\"margin\" . \"0\")))
@@ -33,7 +35,12 @@
   (format nil "~A { ~{~A: ~A;~^ ~} }"
           selector
           (mapcan (lambda (pair)
-                    (list (car pair) (cdr pair)))
+                    (let ((k (car pair)))
+                      (list (typecase k
+                              (string k)
+                              (symbol (string-downcase (symbol-name k)))
+                              (t k))
+                            (cdr pair))))
                   properties)))
 
 (defun css-rules (selector &rest property-pairs)
@@ -84,10 +91,7 @@
   (format nil "@keyframes ~A { ~{~A~^ ~} }"
           name
           (mapcar (lambda (frame)
-                    (format nil "~A { ~{~A: ~A;~^ ~} }"
-                            (car frame)
-                            (mapcan (lambda (p) (list (car p) (cdr p)))
-                                    (cdr frame))))
+                    (css-rule (car frame) (cdr frame)))
                   frames)))
 
 ;;; ─────────────────────────────────────────────────────────────────────────────

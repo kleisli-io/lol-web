@@ -1,0 +1,32 @@
+name: External Consumer
+
+# Proves the public-facing flake artifact (.#default — the umbrella
+# library) builds from a fresh checkout against this flake's declared
+# inputs alone (nixpkgs + cl-deps). This mirrors what a downstream
+# consumer would do: `nix build github:<owner>/<repo>#default`. Any
+# drift between development and consumption fails this gate first.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-default:
+    name: nix build .#default
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          determinate: false
+
+      - name: Build .#default
+        run: nix build .#default --no-link -L

@@ -1,7 +1,7 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/HTMX; Base: 10 -*-
 ;;;; HTMX server-side helpers for request detection and response generation
 
-(in-package :lol-reactive)
+(in-package :lol-web/htmx)
 
 ;;; ============================================================================
 ;;; REQUEST DETECTION
@@ -14,6 +14,16 @@
    Returns T if HX-Request header is 'true'."
   (string= "true" (request-header "HX-Request")))
 
+(defun htmx-boosted-p ()
+  "Check if request is from a hx-boost link.
+   Returns T if HX-Boosted header is 'true'."
+  (string= "true" (request-header "HX-Boosted")))
+
+(defun htmx-history-restore-request-p ()
+  "Check if request is for browser-history restoration.
+   Returns T if HX-History-Restore-Request header is 'true'."
+  (string= "true" (request-header "HX-History-Restore-Request")))
+
 (defun htmx-target ()
   "Get target element ID from HTMX request.
    Returns the value of HX-Target header, or NIL if not present."
@@ -24,10 +34,20 @@
    Returns the value of HX-Trigger header, or NIL if not present."
   (request-header "HX-Trigger"))
 
+(defun htmx-trigger-name ()
+  "Get the triggering element's name attribute from HTMX request.
+   Returns the value of HX-Trigger-Name header, or NIL if not present."
+  (request-header "HX-Trigger-Name"))
+
 (defun htmx-current-url ()
   "Get current browser URL from HTMX request.
    Returns the value of HX-Current-URL header, or NIL if not present."
   (request-header "HX-Current-URL"))
+
+(defun htmx-prompt ()
+  "Get the user's response from a hx-prompt dialog.
+   Returns the value of HX-Prompt header, or NIL if not present."
+  (request-header "HX-Prompt"))
 
 ;;; ============================================================================
 ;;; RESPONSE HELPERS
@@ -35,36 +55,56 @@
 ;;; Generate HTMX-compatible responses with proper headers.
 ;;; ============================================================================
 
-(defmacro with-htmx-response ((&key trigger retarget reswap push-url refresh) &body body)
+(defmacro with-htmx-response ((&key trigger retarget reswap reselect
+                                    push-url replace-url refresh)
+                              &body body)
   "Execute BODY with HTMX response headers set.
 
    Options:
-   - TRIGGER: Event name(s) to trigger on client (string or plist)
-   - RETARGET: CSS selector to retarget the response to
-   - RESWAP: Change the swap strategy (e.g., 'outerHTML')
-   - PUSH-URL: URL to push to browser history
-   - REFRESH: If T, trigger a full page refresh
+   - TRIGGER: Event name(s) to trigger on client (string or plist; non-strings
+     auto-encode to JSON for the HX-Trigger header).
+   - RETARGET: CSS selector to retarget the response to.
+   - RESWAP: Change the swap strategy (e.g., 'outerHTML').
+   - RESELECT: CSS selector to select from the response body before swapping.
+   - PUSH-URL: URL to push to browser history.
+   - REPLACE-URL: URL to replace in browser history (no new entry).
+   - REFRESH: If T, trigger a full page refresh.
 
-   Returns an html-response with the body content and accumulated headers.
+   If BODY returns a string, wraps it in html-response carrying the
+   accumulated headers. If BODY returns a non-string (e.g., a complete Clack
+   response list), the value is returned unchanged so callers can shortcut
+   the html-response wrap (redirect, custom status, streaming).
 
    Example:
    (with-htmx-response (:trigger \"cartUpdated\" :reswap \"innerHTML\")
      (render-cart-items))"
   `(progn
      ,@(when trigger
-         `((add-response-header "HX-Trigger"
-                                ,(if (stringp trigger)
-                                     trigger
-                                     `(cl-json:encode-json-to-string ,trigger)))))
+         ;; stringp must run on the runtime value, not the macroexpansion-time
+         ;; form. (let ((evt "cartUpdated")) (with-htmx-response (:trigger evt) …))
+         ;; previously double-encoded the string because (stringp 'evt) is NIL
+         ;; at expansion, forcing the encode-json-string branch.
+         `((let ((trigger-val ,trigger))
+             (add-response-header "HX-Trigger"
+                                  (if (stringp trigger-val)
+                                      trigger-val
+                                      (encode-json-string trigger-val))))))
      ,@(when retarget
          `((add-response-header "HX-Retarget" ,retarget)))
      ,@(when reswap
          `((add-response-header "HX-Reswap" ,reswap)))
+     ,@(when reselect
+         `((add-response-header "HX-Reselect" ,reselect)))
      ,@(when push-url
          `((add-response-header "HX-Push-Url" ,push-url)))
+     ,@(when replace-url
+         `((add-response-header "HX-Replace-Url" ,replace-url)))
      ,@(when refresh
          `((add-response-header "HX-Refresh" "true")))
-     (html-response (progn ,@body))))
+     (let ((body-result (progn ,@body)))
+       (if (stringp body-result)
+           (html-response body-result :headers (get-response-headers))
+           body-result))))
 
 (defun set-htmx-trigger (event-name &optional event-detail)
   "Set HX-Trigger response header to fire client-side event.
@@ -74,7 +114,7 @@
    Must be called within with-response-headers context."
   (add-response-header "HX-Trigger"
                        (if event-detail
-                           (cl-json:encode-json-to-string
+                           (encode-json-string
                             (list (cons event-name event-detail)))
                            event-name)))
 
@@ -94,12 +134,11 @@
    Must be called within with-response-headers context."
   (add-response-header "HX-Location"
                        (if (or target swap)
-                           (cl-json:encode-json-to-string
-                            (alexandria:alist-hash-table
-                             (remove nil
-                                     (list (cons "path" url)
-                                           (when target (cons "target" target))
-                                           (when swap (cons "swap" swap))))))
+                           (encode-json-string
+                            (remove nil
+                                    (list (cons "path" url)
+                                          (when target (cons "target" target))
+                                          (when swap (cons "swap" swap)))))
                            url)))
 
 ;;; ============================================================================

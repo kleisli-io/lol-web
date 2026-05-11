@@ -9,7 +9,7 @@
 ;;;;   (tw-color "bg" :primary)                      ; => "bg-primary"
 ;;;;   (tw-spacing "p" :4)                           ; => "p-4"
 
-(in-package :lol-reactive)
+(in-package :lol-web/css)
 
 ;;; ─────────────────────────────────────────────────────────────────────────────
 ;;; String Utilities

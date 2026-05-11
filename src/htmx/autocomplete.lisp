@@ -1,27 +1,31 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/HTMX; Base: 10 -*-
 ;;;; HTMX autocomplete component and indicator CSS
 ;;;;
 ;;;; Server-side rendering for autocomplete inputs and CSS for HTMX indicators.
 
-(in-package :lol-reactive)
+(in-package :lol-web/htmx)
 
 ;;; ============================================================================
 ;;; HTMX CSS
 ;;; ============================================================================
 
 (defun htmx-indicator-css ()
-  "Generate CSS for HTMX request indicators using lol-reactive CSS utilities."
+  "Generate CSS for HTMX request indicators using lol-reactive CSS utilities.
+
+   Property keys must be strings, not keywords: css-rules formats keys via
+   ~A, which uppercases keyword symbol-names ((format nil \"~A\" :opacity)
+   => \"OPACITY\"). Lowercase string keys produce valid CSS."
   (concatenate 'string
                "/* HTMX Request Indicator Styles */"
                (css-rules ".htmx-request"
-                          :opacity "0.7"
-                          :cursor "wait")
+                          "opacity" "0.7"
+                          "cursor" "wait")
                (css-rules ".htmx-request.htmx-indicator"
-                          :opacity "1")
+                          "opacity" "1")
                (css-rules ".htmx-indicator"
-                          :display "none")
+                          "display" "none")
                (css-rules ".htmx-request .htmx-indicator, .htmx-request.htmx-indicator"
-                          :display "inline-block")))
+                          "display" "inline-block")))
 
 ;;; ============================================================================
 ;;; AUTOCOMPLETE SUPPORT

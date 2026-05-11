@@ -1,4 +1,4 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/FULLSTACK; Base: 10 -*-
 ;;;; fullstack/component-api.lisp - Components with Auto-Generated API Endpoints
 ;;;;
 ;;;; PURPOSE:
@@ -14,7 +14,7 @@
 ;;;;   POST /api/{component-name}/state - Get/set state
 ;;;;   POST /api/{component-name}/render - Re-render component
 
-(in-package :lol-reactive)
+(in-package :lol-web/fullstack)
 
 ;;; ============================================================================
 ;;; COMPONENT-API REGISTRY
@@ -114,111 +114,134 @@
                ,@(mapcar (lambda (s)
                            `(,(car s) ,(cadr s)))
                          state))
-           (pandoriclet ((id id)
-                         ,@(mapcar (lambda (s) `(,(car s) ,(car s))) state)
-                         ,@(mapcar (lambda (p) `(,p ,p)) props))
-             (dlambda
-               (:id () id)
+           (let ((,g!self
+                  (pandoriclet ((id id)
+                                ,@(mapcar (lambda (s) `(,(car s) ,(car s))) state)
+                                ,@(mapcar (lambda (p) `(,p ,p)) props))
+                    (dlambda
+                      (:id () id)
 
-               (:render ()
-                ,render)
+                      (:render ()
+                       ,render)
 
-               (:state (&optional key)
-                (if key
-                    (ecase key
-                      ,@(mapcar (lambda (s) `((,(car s)) ,(car s))) state))
-                    (list ,@(mapcan (lambda (s)
-                                      `(,(intern (symbol-name (car s)) :keyword)
-                                        ,(car s)))
-                                    state))))
+                      (:state (&optional key)
+                       (if key
+                           (ecase key
+                             ,@(mapcar (lambda (s) `((,(car s)) ,(car s))) state))
+                           (list ,@(mapcan (lambda (s)
+                                             `(,(intern (symbol-name (car s)) :keyword)
+                                               ,(car s)))
+                                           state))))
 
-               (:set-state (key value)
-                (ecase key
-                  ,@(mapcar (lambda (s)
-                              `((,(car s)) (setf ,(car s) value)))
-                            state))
-                value)
+                      (:set-state (key value)
+                       (ecase key
+                         ,@(mapcar (lambda (s)
+                                     `((,(car s)) (setf ,(car s) value)))
+                                   state))
+                       value)
 
-               (:dispatch (action &rest args)
-                (ecase action
-                  ,@(mapcar (lambda (act)
-                              (let ((act-name (extract-action-name act))
-                                    (act-params (extract-action-params act))
-                                    (act-body (extract-action-body act)))
-                                `((,act-name)
-                                  (destructuring-bind ,act-params args
-                                    ,@act-body))))
-                            actions)))
+                      (:dispatch (action &rest args)
+                       (ecase action
+                         ,@(mapcar (lambda (act)
+                                     (let ((act-name (extract-action-name act))
+                                           (act-params (extract-action-params act))
+                                           (act-body (extract-action-body act)))
+                                       `((,act-name)
+                                         (destructuring-bind ,act-params args
+                                           ,@act-body))))
+                                   actions)))
 
-               (:props ()
-                (list ,@(mapcan (lambda (p)
-                                  `(,(intern (symbol-name p) :keyword) ,p))
-                                props)))
+                      (:props ()
+                       (list ,@(mapcan (lambda (p)
+                                         `(,(intern (symbol-name p) :keyword) ,p))
+                                       props)))
 
-               (:inspect ()
-                (list :id id
-                      :component ',name
-                      :state (list ,@(mapcan (lambda (s)
-                                               `(,(intern (symbol-name (car s)) :keyword)
-                                                 ,(car s)))
-                                             state))
-                      :props (list ,@(mapcan (lambda (p)
-                                               `(,(intern (symbol-name p) :keyword) ,p))
-                                             props))
-                      :actions ',action-names))))))
+                      (:inspect ()
+                       (list :id id
+                             :component ',name
+                             :state (list ,@(mapcan (lambda (s)
+                                                      `(,(intern (symbol-name (car s)) :keyword)
+                                                        ,(car s)))
+                                                    state))
+                             :props (list ,@(mapcan (lambda (p)
+                                                      `(,(intern (symbol-name p) :keyword) ,p))
+                                                    props))
+                             :actions ',action-names))))))
+             ;; Register so the API routes (which look up via find-component)
+             ;; can locate this instance. defcomponent does the equivalent in
+             ;; its :mount handler — defcomponent-with-api has no :mount, so
+             ;; register inline at construction time.
+             (register-component id ,g!self)
+             ,g!self)))
 
        ;; Register API routes
        ,@(mapcar (lambda (act)
                    (let* ((act-name (extract-action-name act))
                           (act-params (extract-action-params act))
-                          (api-path (generate-api-path name act-name)))
-                     `(defapi ,api-path (:method :post)
-                        (let* ((component-id (cdr (assoc :component-id body-json)))
-                               (component (find-component component-id)))
-                          (if component
-                              (let ((args (list ,@(mapcar
-                                                   (lambda (p)
-                                                     `(cdr (assoc
-                                                            ,(intern (symbol-name p) :keyword)
-                                                            body-json)))
-                                                   act-params))))
-                                (apply component :dispatch ',act-name args)
-                                (list :success t
-                                      :html (funcall component :render)
-                                      :state (funcall component :state)))
-                              (list :success nil
-                                    :error "Component not found"))))))
+                          (api-path (generate-api-path name act-name))
+                          (handler-name (symb name '- act-name '-handler)))
+                     `(defhandler ,handler-name ,api-path
+                          (:method :post :content-type "application/json")
+                          ((body-json :json-body :required nil))
+                        (encode-json-string
+                          (let* ((component-id (cdr (assoc :component-id body-json)))
+                                 (component (find-component component-id)))
+                            (if component
+                                (let ((args (list ,@(mapcar
+                                                     (lambda (p)
+                                                       `(cdr (assoc
+                                                              ,(intern (symbol-name p) :keyword)
+                                                              body-json)))
+                                                     act-params))))
+                                  (apply component :dispatch ',act-name args)
+                                  (list :success t
+                                        :html (funcall component :render)
+                                        :state (funcall component :state)))
+                                (list :success nil
+                                      :error "Component not found")))))))
                  actions)
 
        ;; State getter route
-       (defapi ,(format nil "/api/~A/get-state" component-path) (:method :post)
-         (let* ((component-id (cdr (assoc :component-id body-json)))
-                (component (find-component component-id)))
-           (if component
-               (list :success t :state (funcall component :state))
-               (list :success nil :error "Component not found"))))
+       (defhandler ,(symb name '-get-state-handler)
+           ,(format nil "/api/~A/get-state" component-path)
+           (:method :post :content-type "application/json")
+           ((body-json :json-body :required nil))
+         (encode-json-string
+           (let* ((component-id (cdr (assoc :component-id body-json)))
+                  (component (find-component component-id)))
+             (if component
+                 (list :success t :state (funcall component :state))
+                 (list :success nil :error "Component not found")))))
 
        ;; State setter route
-       (defapi ,(format nil "/api/~A/set-state" component-path) (:method :post)
-         (let* ((component-id (cdr (assoc :component-id body-json)))
-                (key (intern (string-upcase (cdr (assoc :key body-json))) :keyword))
-                (value (cdr (assoc :value body-json)))
-                (component (find-component component-id)))
-           (if component
-               (progn
-                 (funcall component :set-state key value)
-                 (list :success t
-                       :html (funcall component :render)
-                       :state (funcall component :state)))
-               (list :success nil :error "Component not found"))))
+       (defhandler ,(symb name '-set-state-handler)
+           ,(format nil "/api/~A/set-state" component-path)
+           (:method :post :content-type "application/json")
+           ((body-json :json-body :required nil))
+         (encode-json-string
+           (let* ((component-id (cdr (assoc :component-id body-json)))
+                  (key (intern (string-upcase (cdr (assoc :key body-json))) :keyword))
+                  (value (cdr (assoc :value body-json)))
+                  (component (find-component component-id)))
+             (if component
+                 (progn
+                   (funcall component :set-state key value)
+                   (list :success t
+                         :html (funcall component :render)
+                         :state (funcall component :state)))
+                 (list :success nil :error "Component not found")))))
 
        ;; Render route
-       (defapi ,(format nil "/api/~A/render" component-path) (:method :post)
-         (let* ((component-id (cdr (assoc :component-id body-json)))
-                (component (find-component component-id)))
-           (if component
-               (list :success t :html (funcall component :render))
-               (list :success nil :error "Component not found"))))
+       (defhandler ,(symb name '-render-handler)
+           ,(format nil "/api/~A/render" component-path)
+           (:method :post :content-type "application/json")
+           ((body-json :json-body :required nil))
+         (encode-json-string
+           (let* ((component-id (cdr (assoc :component-id body-json)))
+                  (component (find-component component-id)))
+             (if component
+                 (list :success t :html (funcall component :render))
+                 (list :success nil :error "Component not found")))))
 
        ;; Store route list for introspection
        (defparameter ,routes-var
@@ -300,3 +323,64 @@
     (when entry
       (list :name name
             :routes (cdr entry)))))
+
+;;; ============================================================================
+;;; BUILT-IN COMPONENT-API ROUTES
+;;;
+;;; Generic per-component dispatch endpoints registered at load time. These
+;;; are the manually-defined siblings of the per-component routes that
+;;; defcomponent-with-api auto-generates: any component placed in the
+;;; component registry (by register-component / defcomponent) becomes
+;;; reachable through these endpoints without further per-component wiring.
+;;;
+;;; Lives in :lol-web/fullstack rather than :lol-web/server because they
+;;; depend on the component-system protocol (find-component, :dispatch,
+;;; :set-state, :inspect, render-component) — server substrate has no
+;;; concept of "component". Server stays component-agnostic; an application
+;;; that doesn't load fullstack also doesn't pay for these routes.
+;;; ============================================================================
+
+(defhandler component-api-dispatch-handler "/api/dispatch"
+    (:method :post :content-type "application/json")
+    ((body-json :json-body :required nil))
+  "Dispatch an action to a component."
+  (encode-json-string
+    (let* ((component-id (cdr (assoc :component-id body-json)))
+           (action (intern (string-upcase (cdr (assoc :action body-json))) :keyword))
+           (args (cdr (assoc :args body-json)))
+           (component (find-component component-id)))
+      (if component
+          (progn
+            (apply #'funcall component :dispatch action args)
+            `((:success . t)
+              (:html . ,(render-component component))))
+          `((:success . nil)
+            (:error . "Component not found"))))))
+
+(defhandler component-api-set-state-handler "/api/set-state"
+    (:method :post :content-type "application/json")
+    ((body-json :json-body :required nil))
+  "Set state on a component."
+  (encode-json-string
+    (let* ((component-id (cdr (assoc :component-id body-json)))
+           (key (intern (string-upcase (cdr (assoc :key body-json))) :keyword))
+           (value (cdr (assoc :value body-json)))
+           (component (find-component component-id)))
+      (if component
+          (progn
+            (funcall component :set-state key value)
+            `((:success . t)
+              (:html . ,(render-component component))))
+          `((:success . nil)
+            (:error . "Component not found"))))))
+
+(defhandler component-api-component-state-handler "/api/component-state"
+    (:method :post :content-type "application/json")
+    ((body-json :json-body :required nil))
+  "Get component state for inspection."
+  (encode-json-string
+    (let* ((component-id (cdr (assoc :component-id body-json)))
+           (component (find-component component-id)))
+      (if component
+          (funcall component :inspect)
+          `((:error . "Component not found"))))))

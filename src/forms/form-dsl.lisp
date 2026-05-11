@@ -1,4 +1,4 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/FORMS; Base: 10 -*-
 ;;;; forms/form-dsl.lisp - Type-Safe Form DSL
 ;;;;
 ;;;; PURPOSE:
@@ -13,7 +13,7 @@
 ;;;;   - Client-side Parenscript validation
 ;;;;   - Form registry for introspection
 
-(in-package :lol-reactive)
+(in-package :lol-web/forms)
 
 ;;; ============================================================================
 ;;; FORM REGISTRY
@@ -66,20 +66,6 @@
   "Convert field type keyword to HTML input type string."
   (or (cdr (assoc field-type *field-type-to-input*))
       "text"))
-
-(defun html-attrs (&rest pairs)
-  "Generate HTML attribute string from key-value pairs.
-   NIL values are omitted. T values become boolean attributes.
-   All values are properly sanitized.
-
-   Example: (html-attrs \"id\" \"foo\" \"required\" t \"disabled\" nil)
-            => \" id=\\\"foo\\\" required\""
-  (with-output-to-string (s)
-    (loop for (name value) on pairs by #'cddr
-          when value do
-          (if (eq value t)
-              (format s " ~A" name)  ; boolean attribute
-              (format s " ~A=\"~A\"" name (sanitize-attribute (princ-to-string value)))))))
 
 (defun generate-input-element (field-type input-type field-id field-name input-class
                                 value required placeholder min-val max-val minlength maxlength)
@@ -338,7 +324,7 @@
                                          ((ps:@ container class-list add) "has-errors")
                                          ;; Remove old error messages
                                          (let ((old-errors ((ps:@ container query-selector-all) ".field-error")))
-                                           ((ps:@ old-errors for-each) (lambda (el) ((ps:@ elremove)))))
+                                           ((ps:@ old-errors for-each) (lambda (el) ((ps:@ el remove)))))
                                          ;; Add new error messages
                                          ((ps:@ errors for-each)
                                           (lambda (msg)
@@ -348,15 +334,15 @@
                                               ((ps:@ container append-child) err-el)))))))))
                               fields)
                     (unless valid
-                      ((ps:@ eprevent-default))))))
+                      ((ps:@ e prevent-default))))))
                ;; Clear errors on input
                ((ps:@ form add-event-listener) "input"
                 (lambda (e)
-                  (let ((container ((ps:@ (ps:@ etarget) closest) ".form-field")))
+                  (let ((container ((ps:@ (ps:@ e target) closest) ".form-field")))
                     (when container
                       ((ps:@ container class-list remove) "has-errors")
                       (let ((errors ((ps:@ container query-selector-all) ".field-error")))
-                        ((ps:@ errors for-each) (lambda (el) ((ps:@ elremove))))))))
+                        ((ps:@ errors for-each) (lambda (el) ((ps:@ el remove))))))))
                 t)))))))))
 
 ;;; ============================================================================
@@ -394,6 +380,11 @@
   (let* ((spec (get-form-spec form-name))
          (fields (getf spec :fields))
          (form-id (format nil "form-~A" (string-downcase form-name)))
+         ;; multipart/form-data is required for browsers to transmit
+         ;; file-upload bodies; without it the file input submits only
+         ;; the filename string.
+         (has-file-field (some (lambda (f) (eq (getf (cdr f) :type) :file)) fields))
+         (enctype (when has-file-field "multipart/form-data"))
          ;; Tailwind classes
          (form-class (classes "max-w-md" extra-classes))
          (actions-class "mt-6")
@@ -408,7 +399,8 @@
               (html-attrs "id" form-id
                           "class" form-class
                           "action" action
-                          "method" method))
+                          "method" method
+                          "enctype" enctype))
       ;; Form content via htm-str
       (render-form-content fields values errors include-csrf method actions-class button-class submit-text)
       "</form>"

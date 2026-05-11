@@ -1,10 +1,10 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/REALTIME; Base: 10 -*-
 ;;;; Server-Sent Events (SSE) support for lol-reactive
 ;;;;
 ;;;; Provides SSE connection management and message broadcasting
 ;;;; for simpler server-to-client push scenarios.
 
-(in-package :lol-reactive)
+(in-package :lol-web/realtime)
 
 ;;; ============================================================================
 ;;; CONNECTION REGISTRY
@@ -51,12 +51,9 @@
     (when event-type
       (format s "event: ~A~%" event-type))
     ;; Data must be on its own line(s), each prefixed with "data: "
-    (let ((data-str (cond ((stringp data) data)
-                          ;; Alists (keyword . value) must use alist encoder
-                          ;; to produce {"key": value} instead of [["key", value]]
-                          ((and (consp data) (consp (car data)) (keywordp (caar data)))
-                           (cl-json:encode-json-alist-to-string data))
-                          (t (cl-json:encode-json-to-string data)))))
+    (let ((data-str (if (stringp data)
+                        data
+                        (encode-json-string data))))
       ;; Handle multi-line data
       (dolist (line (uiop:split-string data-str :separator '(#\Newline)))
         (format s "data: ~A~%" line)))
@@ -110,18 +107,40 @@
               (sse-remove-connection channel conn)
               (return-from sse-handler nil)))
 
-          ;; BLOCKING: Keep connection alive by sending periodic pings
-          ;; This blocks the worker thread to keep the connection open
+          ;;; ─────────────────────────────────────────────────────────────────
+          ;;; CONSTRAINT: thread-per-connection (Hunchentoot)
+          ;;;
+          ;;; Server-Sent Events under Hunchentoot occupy one worker thread
+          ;;; per active connection for the lifetime of that connection. The
+          ;;; loop below blocks the worker (alternating writes + sleep 30) so
+          ;;; the underlying TCP stream stays open and the writer closure
+          ;;; remains valid; returning would let the worker tear the response
+          ;;; down. Nothing here is async — every connection is a held thread.
+          ;;;
+          ;;; Implications:
+          ;;;   - Total concurrent SSE clients is bounded by the Hunchentoot
+          ;;;     worker pool (default 100). Beyond that, new SSE requests
+          ;;;     queue or are rejected; ordinary HTTP traffic competes for
+          ;;;     the same workers.
+          ;;;   - Long-lived dashboards / push streams should run on a
+          ;;;     dedicated server instance (or a non-thread-per-conn host
+          ;;;     like Woo) when client counts grow into the hundreds.
+          ;;;   - The 30-second cadence is a heartbeat, not a poll interval.
+          ;;;     Real events flow through sse-send / sse-broadcast, which
+          ;;;     write to the held :stream from any thread.
+          ;;; ─────────────────────────────────────────────────────────────────
           (unwind-protect
               (loop while (getf conn :alive-p)
                     do (handler-case
                            (progn
-                             ;; Send keep-alive comment every 30 seconds
+                             ;; Heartbeat keeps proxies / NAT entries from
+                             ;; treating the connection as idle.
                              (funcall writer (format nil ": keepalive~%~%"))
                              (sleep 30))
                          (error (e)
                            (declare (ignore e))
-                           ;; Connection closed
+                           ;; Peer disconnected mid-write — bail and let the
+                           ;; unwind-protect drop the registration.
                            (setf (getf conn :alive-p) nil))))
             ;; Cleanup on exit
             (sse-remove-connection channel conn)))))))
@@ -268,7 +287,7 @@
      (defsse \"/sse/notifications\" \"notifications\"
        :on-connect (lambda (conn)
                      (log:info \"Client connected to notifications\")))"
-  `(setf (gethash (cons :get ,path) *routes*)
+  `(setf (gethash (cons :get ,path) *streaming-routes*)
          (make-sse-handler ,channel
                            :on-connect ,on-connect
                            :on-disconnect ,on-disconnect)))

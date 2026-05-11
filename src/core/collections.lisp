@@ -1,9 +1,9 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/CORE; Base: 10 -*-
 ;;;; LOL-REACTIVE Collections - Reactive data structures
 ;;;;
 ;;;; Fine-grained reactive collections built on the signal infrastructure.
 
-(in-package :lol-reactive)
+(in-package :lol-web/core)
 
 ;;; ============================================================================
 ;;; REACTIVE LIST - Fine-Grained Collection Updates
@@ -36,8 +36,7 @@
       (dlambda
         ;; Get all items (reactive)
         (:items ()
-         (when *current-effect*
-           (setf (gethash *current-effect* subscribers) t))
+         (track-subscription subscribers)
          (coerce items 'list))
 
         ;; Push item to end
@@ -56,8 +55,7 @@
 
         ;; Get item at index (reactive)
         (:nth (idx)
-         (when *current-effect*
-           (setf (gethash *current-effect* subscribers) t))
+         (track-subscription subscribers)
          (when (< idx (length items))
            (aref items idx)))
 
@@ -70,18 +68,15 @@
 
         ;; Length
         (:length ()
-         (when *current-effect*
-           (setf (gethash *current-effect* subscribers) t))
+         (track-subscription subscribers)
          (length items))
 
         ;; Map over items (reactive)
         (:map (fn)
-         (when *current-effect*
-           (setf (gethash *current-effect* subscribers) t))
+         (track-subscription subscribers)
          (map 'list fn items))
 
         ;; Filter items (reactive)
         (:filter (pred)
-         (when *current-effect*
-           (setf (gethash *current-effect* subscribers) t))
+         (track-subscription subscribers)
          (remove-if-not pred (coerce items 'list)))))))

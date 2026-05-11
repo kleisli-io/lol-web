@@ -1,8 +1,8 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/RENDERING; Base: 10 -*-
 ;;;; Keyed List Rendering
 ;;;; Efficient list updates with key-based reconciliation
 
-(in-package :lol-reactive)
+(in-package :lol-web/rendering)
 
 ;;; ============================================================================
 ;;; FOR-EACH - Keyed List Rendering Macro
@@ -33,20 +33,23 @@
 ;;; ============================================================================
 
 (defun reconcile-list (old-items new-items &key (key #'identity) (test #'equal))
-  "Compute minimal diff between old and new item lists.
+  "Compute diff between old and new item lists keyed by KEY.
 
    OLD-ITEMS: List of items before update
    NEW-ITEMS: List of items after update
    KEY: Function to extract unique key from each item
-   TEST: Equality test for keys
+   TEST: Equality test for item content (used to detect updates at same position)
 
    Returns list of operations:
      (:insert position item)  - Insert item at position
-     (:remove position)       - Remove item at position
-     (:move from to)          - Move item from position to position
-     (:update position item)  - Update item at position (same key, different content)
+     (:remove position key)   - Remove item at position
+     (:update position item)  - Update item at position (same key, same position,
+                                different content)
 
-   Algorithm uses key-based tracking to minimize DOM operations."
+   A moved key (present in both lists but at a different index) is emitted as
+   (:remove old-pos key) followed by (:insert new-pos new-item) — the diff is
+   not a true minimal edit script; the client is expected to apply removes
+   before inserts. Returns removes (ascending old-pos) before inserts/updates."
   (let* ((old-keys (mapcar key old-items))
          (new-keys (mapcar key new-items))
          (old-map (make-hash-table :test test))
@@ -61,22 +64,24 @@
           for i from 0
           do (setf (gethash (funcall key item) new-map) (cons i item)))
 
-    ;; Find removes (in old but not in new)
+    ;; Removes for keys that disappeared from new
     (loop for k in old-keys
           for i from 0
           unless (gethash k new-map)
           do (push `(:remove ,i ,k) ops))
 
-    ;; Find inserts and updates (in new)
+    ;; For each new key: insert if absent in old, remove+insert if moved,
+    ;; update if same position with different content
     (loop for k in new-keys
           for new-pos from 0
           for new-item in new-items
           do (let ((old-entry (gethash k old-map)))
                (cond
-                 ;; Not in old - insert
                  ((null old-entry)
                   (push `(:insert ,new-pos ,new-item) ops))
-                 ;; In old - check if content changed (update)
+                 ((/= (car old-entry) new-pos)
+                  (push `(:remove ,(car old-entry) ,k) ops)
+                  (push `(:insert ,new-pos ,new-item) ops))
                  ((not (funcall test (cdr old-entry) new-item))
                   (push `(:update ,new-pos ,new-item) ops)))))
 

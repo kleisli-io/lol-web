@@ -1,10 +1,10 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/REALTIME-HTMX; Base: 10 -*-
 ;;;; WebSocket client runtime (Parenscript)
 ;;;;
 ;;;; Client-side WebSocket connection management, reconnection with
 ;;;; exponential backoff, and message processing.
 
-(in-package :lol-reactive)
+(in-package :lol-web/realtime-htmx)
 
 ;;; ============================================================================
 ;;; WEBSOCKET CLIENT RUNTIME (Parenscript)
@@ -70,15 +70,27 @@
                      ;; Handle connection close with reconnection
                      (setf (ps:@ ws onclose)
                            (lambda (event)
-                             (ps:chain console (log "WebSocket closed:" channel "- reconnecting in" reconnect-delay "ms"))
-                             (when on-close
-                               (funcall on-close event ws))
-                             ;; Attempt reconnection with exponential backoff
-                             (set-timeout
-                              (lambda ()
-                                ((ps:@ *ws-manager* connect) channel options))
-                              reconnect-delay)
-                             ;; Increase delay for next attempt (with max)
+                             ;; Exponential backoff with FULL jitter:
+                             ;;   delay = floor(reconnectDelay * Math.random())
+                             ;; Without jitter, every client that disconnects
+                             ;; together retries at identical multiples of the
+                             ;; base delay → thundering-herd hits the server
+                             ;; on every backoff edge. Full jitter spreads
+                             ;; retries uniformly over [0, reconnectDelay).
+                             (let ((jittered-delay
+                                     (ps:chain -math
+                                               (floor (* reconnect-delay
+                                                         (ps:chain -math (random)))))))
+                               (ps:chain console (log "WebSocket closed:" channel
+                                                      "- reconnecting in" jittered-delay "ms"))
+                               (when on-close
+                                 (funcall on-close event ws))
+                               (set-timeout
+                                (lambda ()
+                                  ((ps:@ *ws-manager* connect) channel options))
+                                jittered-delay))
+                             ;; Grow the upper bound for the next attempt
+                             ;; (capped at maxReconnectDelay).
                              (setf reconnect-delay
                                    (ps:chain -math (min (* reconnect-delay 2)
                                                         (ps:@ *ws-manager* max-reconnect-delay))))))

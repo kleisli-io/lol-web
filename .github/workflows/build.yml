@@ -1,0 +1,34 @@
+name: Build
+
+# PR-blocking gate. Runs the umbrella build (which includes the umbrella's
+# test phase), every per-sub-system standalone derivation, and the ASDF
+# manifest drift check. The flake's `checks.<system>` outputs enumerate
+# them so `nix flake check` exercises the full set in one invocation.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: nix flake check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: DeterminateSystems/nix-installer-action@v22
+        with:
+          # Plain upstream Nix is sufficient; this job runs `nix flake
+          # check` and doesn't gate on evaluator version. Skipping
+          # Determinate avoids the FlakeHub login path.
+          determinate: false
+
+      - name: Run flake checks
+        run: nix flake check -L

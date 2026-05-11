@@ -1,9 +1,9 @@
-;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-REACTIVE; Base: 10 -*-
+;;;; -*- Mode: LISP; Syntax: COMMON-LISP; Package: LOL-WEB/HTMX; Base: 10 -*-
 ;;;; Out-of-Band (OOB) response helpers for HTMX-style partial updates
 ;;;;
 ;;;; Server-side utilities for generating hx-swap-oob responses.
 
-(in-package :lol-reactive)
+(in-package :lol-web/htmx)
 
 ;;; ============================================================================
 ;;; OOB RESPONSE HELPERS
